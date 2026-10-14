@@ -922,11 +922,8 @@ def render_report(rep, prims):
         op = r.get("op")
         head = "{}.".format(i + 1)
         if op == "walk" and p is not None:
-            d = r.get("est_distance_m")
-            cmd = r.get("commanded_s")
-            if r.get("aborted") and d is not None and cmd and t is not None:
-                d = d * min(1.0, t / cmd)
-            s = "{} Walked forward for {:.1f} s at {:.2f} m/s".format(head, t or 0.0, p.vx)
+            d = r.get("est_distance_m")     # already scaled for an interrupted walk
+            s ="{} Walked forward for {:.1f} s at {:.2f} m/s".format(head, t or 0.0, p.vx)
             if d is not None:
                 if r.get("est_err_m") is not None:
                     s += ": about {:.1f} +- {:.1f} m (time x calibrated speed; no odometry)".format(

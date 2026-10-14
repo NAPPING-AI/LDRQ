@@ -303,6 +303,16 @@ ea, _, _, _ = simulate(pa, lim_a)
 ra = ea.report()["executed"][0]
 check("report labels the distance as assumed and gives no est_err_m",
       "assumed" in ra.get("distance_source", "") and "est_err_m" not in ra, ra)
+# Robot, 2026-10-14: a 4 s walk stopped at 1.8 s replied "about 0.2 m" while the
+# JSON report still carried the whole plan's 0.4 m.
+pw = P.compile_plan(P.parse_script("walk 4m@0.5"), TRAINED, lim_a)[0]    # 8 s
+ew = ex.Executor(pw, lim_a)
+for k in range(0, 31):                      # starts at 1.0 s, stepped to 4.0 s
+    ew.step(1.0 + k * 0.1, yaw=0.0, bridge_state="RUNNING")
+ew.interrupt("operator interrupt (Ctrl-C)")
+rw = ew.report()["executed"][0]
+check("Ctrl-C mid-walk: the JSON distance is the share walked, the plan's is kept",
+      abs(rw["est_distance_m"] - 1.5) < 1e-6 and rw["planned_distance_m"] == 4.0, rw)
 pb = P.compile_plan(P.parse_script("walk 10m@0.5"), TRAINED,
                     P.Limits(v_cal=0.2, v_cal_assumed=True))[0]
 check("assumed wins over a stray v_cal number", abs(pb[0].duration_s - 20.0) < 1e-9)

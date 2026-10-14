@@ -375,9 +375,11 @@ Output on, kp 1.3, slack gantry, qwen3:1.7b on the GPU, 11 logged requests.
 as for stages A and B.
 - Placement: the GPU (decision above).
 - Laya: closed (see [Choice](#choice-decided-2026-09-30)).
-- The fixes the session prompted come in `~/r1_stageC_2026-09-30c.tar.gz`. They need a
-  few minutes at the next robot session: install, run the tests, check the Ctrl-C timing
-  on a short walk.
+- The fixes the session prompted were verified on the robot on 2026-10-14, as part of
+  release v1.1.0 installed from its archives: a 4 s walk stopped with Ctrl-C reported
+  1.8 s walked (it used to report 0.0 s). The same run showed that the JSON report kept
+  the whole plan's distance for the interrupted walk; the record now holds the share
+  walked, with the plan's distance as `planned_distance_m`.
 - Open as follow-up work, not as stage C items:
   - the GPU-side optimization ([system_architecture.md](system_architecture.md#the-shared-gpu-decision-2026-09-30));
   - checking directions for provenance ("the other way");

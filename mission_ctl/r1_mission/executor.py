@@ -60,7 +60,13 @@ class Record(object):
             d["achieved_deg"] = round(self.achieved_deg, 2)
             d["source"] = "imu_yaw"
         if self.est_distance_m is not None:
-            d["est_distance_m"] = round(self.est_distance_m, 3)
+            est = self.est_distance_m
+            if self.aborted and self.commanded_s and self.actual_s is not None:
+                # an interrupted walk covered only its share of the plan's distance;
+                # the robot log (2026-10-14) had 0.4 m for a walk stopped at 1.8 of 4 s
+                d["planned_distance_m"] = round(est, 3)
+                est = est * min(1.0, self.actual_s / self.commanded_s)
+            d["est_distance_m"] = round(est, 3)
             if self.est_err_m is None:
                 d["distance_source"] = ("open loop: commanded time x commanded speed "
                                         "(assumed equal to ground speed, not measured)")

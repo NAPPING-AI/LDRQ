@@ -21,7 +21,27 @@ import json
 import math
 import re
 
-OPS = ("walk", "turn", "stand", "stop")
+OPS = ("walk", "turn", "stand", "stop", "turn_to", "walk_to")
+OBJECT_OPS = ("turn_to", "walk_to")
+MOVING_OPS = ("walk", "turn", "turn_to", "walk_to")
+
+# Slowest walk the mission layer will command: the slowest the real robot has walked
+# at (PG-2, 2026-09-28, untethered). With the 2 s floor it makes 0.2 m the shortest
+# walk, and so also walk_to's arrival tolerance.
+WALK_MIN_VX = 0.1
+
+# A walk's direction picks the axis and the sign; its speed is always a positive
+# magnitude. Which directions exist is the envelope's business (Envelope.walk_dirs):
+# v1 was trained forward only, v2 also backward and sideways.
+WALK_DIRS = ("forward", "backward", "left", "right")
+_WALK_AXIS = {"forward": ("vx", 1.0), "backward": ("vx", -1.0),
+              "left": ("vy", 1.0), "right": ("vy", -1.0)}
+
+
+def walk_velocity(direction, speed):
+    """(vx, vy) for a walk at `speed` (> 0) in `direction`."""
+    axis, sign = _WALK_AXIS[direction]
+    return (sign * speed, 0.0) if axis == "vx" else (0.0, sign * speed)
 
 # The closed-loop turn runs at the commanded rate until TAPER_DEG from the target,
 # then slows in proportion to what is left, never below TAPER_FLOOR of the rate
@@ -61,15 +81,16 @@ def expected_turn_s(yaw_deg, wz, ramp_s, min_wz=0.0):
     return t
 
 
-def achieved_speed(vx, limits):
-    """The ground speed a commanded vx is taken to produce, or None if there is
-    nothing to convert a distance with."""
+def achieved_speed(vx, limits, direction="forward"):
+    """The ground speed a commanded speed is taken to produce, or None if there is
+    nothing to convert a distance with. A measured v_cal is a FORWARD measurement,
+    so it converts forward walks only."""
     if limits.v_cal_assumed:
         # Decided 2026-09-28: no venue to measure it, and the task only needs
         # distances at the level of "a few meters". Taken as equal to the command,
         # and reported as an assumption, never with an error bar that looks measured.
         return vx
-    if limits.v_cal is None:
+    if limits.v_cal is None or direction != "forward":
         return None
     # The commanded vx is what the policy is asked for; v_cal is what the robot
     # actually achieves at cruise_vx. Scale by the command ratio.
@@ -119,6 +140,22 @@ class Envelope(object):
         lo, hi = getattr(self, axis)
         return lo == 0.0 and hi == 0.0
 
+    def walk_dirs(self):
+        """The walk directions this envelope was trained for."""
+        out = ["forward"] if self.vx[1] > 0.0 else []
+        if self.vx[0] < 0.0:
+            out.append("backward")
+        if self.vy[1] > 0.0:
+            out.append("left")
+        if self.vy[0] < 0.0:
+            out.append("right")
+        return out
+
+    def walk_max(self, direction):
+        """Fastest trained speed (a magnitude) in a walk direction; 0 if untrained."""
+        return {"forward": max(0.0, self.vx[1]), "backward": max(0.0, -self.vx[0]),
+                "left": max(0.0, self.vy[1]), "right": max(0.0, -self.vy[0])}[direction]
+
     def check(self, axis, value, what):
         lo, hi = getattr(self, axis)
         if self.pinned(axis):
@@ -143,17 +180,22 @@ class Envelope(object):
         vlo, vhi = self.vx
         wlo, whi = self.wz
         if lang == "zh":
-            bits = ["前进 {:.2f}~{:.2f} m/s{}".format(vlo, vhi,
-                                                   "（不能倒车）" if vlo >= 0 else "")]
+            bits = ["前进最快 {:.2f} m/s".format(vhi) + (
+                "（不能倒车）" if vlo >= 0 else "，后退最快 {:.2f} m/s".format(-vlo))]
             bits.append("不能横移（训练中该轴全程钉死为 0）" if self.pinned("vy")
-                        else "横移 {:.2f}~{:.2f} m/s".format(*self.vy))
+                        else "左右横移最快 {:.2f} / {:.2f} m/s".format(self.vy[1], -self.vy[0]))
             bits.append("原地转向，最快 {:.2f} rad/s（边走边转未验证）".format(max(abs(wlo), abs(whi))))
             return "；".join(bits)
-        bits = ["I can walk forward at {:.2f} to {:.2f} m/s{}".format(
-            vlo, vhi, " (I cannot walk backward)" if vlo >= 0 else "")]
+        if vlo >= 0:
+            bits = ["I can walk forward at {:.2f} to {:.2f} m/s (I cannot walk "
+                    "backward)".format(vlo, vhi)]
+        else:
+            bits = ["I can walk forward at up to {:.2f} m/s and backward at up to {:.2f} "
+                    "m/s".format(vhi, -vlo)]
         bits.append("I cannot move sideways (that axis was fixed at zero for all "
                     "of my training)" if self.pinned("vy")
-                    else "I can move sideways at {:.2f} to {:.2f} m/s".format(*self.vy))
+                    else "I can step sideways, left at up to {:.2f} m/s and right at up "
+                         "to {:.2f} m/s".format(self.vy[1], -self.vy[0]))
         # On the spot only: mission_ctl has no walk-and-turn primitive, and on the PG-2
         # run (2026-09-29) a 0.15 rad/s turn while walking was lost entirely.
         bits.append("I can turn left or right on the spot at up to {:.2f} rad/s (I do not "
@@ -162,11 +204,24 @@ class Envelope(object):
 
 
 class Prim(object):
-    """One resolved primitive: a constant (vx, wz) plus how it ends."""
+    """One resolved primitive: a constant (vx, vy, wz) plus how it ends."""
 
     def __init__(self, op, vx=0.0, wz=0.0, duration_s=None, yaw_deg=None,
-                 distance_m=None, distance_err_m=None, text="", expected_s=None):
+                 distance_m=None, distance_err_m=None, text="", expected_s=None,
+                 target_cls=None, target_text=None, stop_at_m=None, stop_default=False,
+                 vy=0.0, direction=None):
         self.op = op
+        # walk: which way, and vy for a sideways walk (vx stays the forward axis)
+        self.vy = float(vy)
+        self.direction = direction or ("forward" if op == "walk" else None)
+        # turn_to / walk_to: the COCO class (objects.py decided it), the operator's own
+        # words for it, and for walk_to the distance to stop at, measured by depth.
+        # `ground` is the detection the operator confirmed (node.py fills it).
+        self.target_cls = target_cls
+        self.target_text = target_text
+        self.stop_at_m = None if stop_at_m is None else float(stop_at_m)
+        self.stop_default = bool(stop_default)
+        self.ground = None
         self.vx = float(vx)
         self.wz = float(wz)
         self.duration_s = None if duration_s is None else float(duration_s)
@@ -178,6 +233,8 @@ class Prim(object):
         # duration_s stays the bare angle / rate, which is what the report calls
         # commanded_s; the timeout and the plan total use this one.
         self.expected_s = None if expected_s is None else float(expected_s)
+        self.segment_m = None
+        self.budget_s = None     # turn_to / walk_to: the executor's timeout
 
     @property
     def closed_loop(self):
@@ -188,7 +245,13 @@ class Prim(object):
 
     def summary(self):
         if self.op == "walk":
-            s = "walk vx={:.2f} for {:.2f}s".format(self.vx, self.duration_s or 0.0)
+            if self.direction in ("left", "right"):
+                s = "walk {} vy={:+.2f}".format(self.direction, self.vy)
+            elif self.direction == "backward":
+                s = "walk backward vx={:+.2f}".format(self.vx)
+            else:
+                s = "walk vx={:.2f}".format(self.vx)
+            s += " for {:.2f}s".format(self.duration_s or 0.0)
             if self.distance_m is not None:
                 if self.distance_err_m is None:
                     s += " (~{:.2f} m if speed = command; not measured)".format(
@@ -205,6 +268,15 @@ class Prim(object):
                 self.wz, self.duration_s or 0.0)
         if self.op == "stand":
             return "stand for {:.2f}s".format(self.duration_s or 0.0)
+        if self.op == "turn_to":
+            return "turn_to {} ('{}'): face it, IMU-closed turns, checked by the camera".format(
+                self.target_cls, self.target_text)
+        if self.op == "walk_to":
+            return ("walk_to {} ('{}'): stop {:.2f} m from it by the depth camera{}; walks of "
+                    "<= {:.1f} m, re-measured after each (each walk open loop)".format(
+                        self.target_cls, self.target_text, self.stop_at_m or 0.0,
+                        " (default: you did not say)" if self.stop_default else "",
+                        self.segment_m or 1.0))
         return "stop"
 
 
@@ -221,8 +293,13 @@ class Limits(object):
                  ramp_s=0.5, min_primitive_s=2.0, max_total_s=120.0,
                  max_total_m=30.0, max_prims=20, yaw_tol_deg=3.0,
                  turn_timeout_factor=2.0, settle_s=1.0, start_timeout_s=10.0,
-                 v_cal_assumed=False, turn_min_wz=0.0):
+                 v_cal_assumed=False, turn_min_wz=0.0, cruise_back_vx=0.3,
+                 cruise_vy=0.2, **obj):
         self.cruise_vx = float(cruise_vx)
+        # Default speeds (magnitudes) for a backward and a sideways walk, used only
+        # when the envelope has those directions at all.
+        self.cruise_back_vx = float(cruise_back_vx)
+        self.cruise_vy = float(cruise_vy)
         self.cruise_wz = float(cruise_wz)
         self.v_cal = None if v_cal is None else float(v_cal)
         self.v_cal_rel_err = float(v_cal_rel_err)
@@ -241,12 +318,57 @@ class Limits(object):
         self.turn_timeout_factor = float(turn_timeout_factor)
         self.settle_s = float(settle_s)
         self.start_timeout_s = float(start_timeout_s)
+        # ---- stage E: turn_to / walk_to (mission.yaml obj_*; see OBJ_DEFAULTS) ----
+        for k, v in OBJ_DEFAULTS.items():
+            setattr(self, k, obj.pop(k, v))
+        if obj:
+            raise TypeError("unknown Limits field(s): " + ", ".join(sorted(obj)))
+
+    def cruise(self, direction):
+        """Default speed (a magnitude) for a walk in `direction`."""
+        return {"forward": self.cruise_vx, "backward": self.cruise_back_vx,
+                "left": self.cruise_vy, "right": self.cruise_vy}[direction]
+
+    @property
+    def obj_arrive_tol_m(self):
+        """walk_to is done when what is left is under the shortest walk it can make."""
+        return WALK_MIN_VX * self.min_primitive_s
 
 
-_WALK = re.compile(r"^walk\s+([\d.]+)\s*(s|m)\s*(?:@\s*([\d.]+))?$", re.I)
+# Stage E. The camera settings (thresholds that decide what is PUBLISHED, the per-frame
+# safety facts) live in perception/config/perception.yaml; these decide what the
+# mission ACTS on.
+OBJ_DEFAULTS = {
+    "perception": True,           # False: turn_to / walk_to are refused
+    # "object": the camera guards the walks inside turn_to / walk_to; "all": every
+    # walk needs a fresh frame and stops for a person or an obstacle; "off": none.
+    "perception_guard": "object",
+    "obj_target_conf": 0.5,       # a target needs this confidence ...
+    "obj_confirm_frames": 3,      # ... in this many consecutive frames
+    "obj_gate_deg": 20.0,         # the same target, between steps: within this of where expected
+    "obj_look_timeout_s": 3.0,    # standing still, waiting for a confirmed target
+    "obj_settle_s": 1.0,          # after stopping, before frames count
+    "obj_stale_s": 0.5,           # a walk under camera guard stops if the newest frame is older
+    "obj_turn_tol_deg": 5.0,      # turn_to: facing within this is done
+    "obj_max_corrections": 2,     # turn_to: correcting turns after the first
+    "obj_align_tol_deg": 8.0,     # walk_to: turn first if the target is further off than this
+    "obj_segment_m": 1.0,         # walk_to: longest walk between two measurements
+    "obj_vx": 0.3,                # walk_to: walking speed (slowed for a short last walk)
+    "obj_stop_default_m": 1.0,    # walk_to with no distance said
+    "obj_stop_min_m": 0.8,        # above perception's obstacle_stop_m (0.6): the target is in the corridor
+    "obj_max_range_m": 5.0,       # walk_to refuses a target further than this (depth)
+    "obj_max_segments": 10,
+    "obj_person_stop_m": 1.2,     # = perception's person_stop_m: walk_to a person stops no nearer
+}
+
+
+_WALK = re.compile(r"^walk\s+(?:(forward|backward|back|left|right)\s+)?([\d.]+)\s*(s|m)"
+                   r"\s*(?:@\s*([\d.]+))?$", re.I)
 _TURN_DEG = re.compile(r"^turn\s+(left|right)\s+([\d.]+)\s*(?:deg)?\s*(?:@\s*([\d.]+))?$", re.I)
 _TURN_S = re.compile(r"^turn\s+(left|right)\s+([\d.]+)\s*s\s*(?:@\s*([\d.]+))?$", re.I)
 _STAND = re.compile(r"^stand\s+([\d.]+)\s*s$", re.I)
+_TURN_TO = re.compile(r"^turn_to\s+(.+?)$", re.I)
+_WALK_TO = re.compile(r"^walk_to\s+(.+?)(?:\s+stop_at\s+([\d.]+)\s*m?)?$", re.I)
 
 
 def parse_script(script):
@@ -278,9 +400,11 @@ def parse_script(script):
             continue
         m = _WALK.match(item)
         if m:
-            key = "duration_s" if m.group(2).lower() == "s" else "distance_m"
-            steps.append({"op": "walk", key: float(m.group(1)),
-                          "vx": float(m.group(3)) if m.group(3) else None,
+            key = "duration_s" if m.group(3).lower() == "s" else "distance_m"
+            direction = (m.group(1) or "forward").lower()
+            steps.append({"op": "walk", key: float(m.group(2)),
+                          "direction": "backward" if direction == "back" else direction,
+                          "vx": float(m.group(4)) if m.group(4) else None,
                           "text": item})
             continue
         m = _STAND.match(item)
@@ -291,10 +415,22 @@ def parse_script(script):
         if low == "stop":
             steps.append({"op": "stop", "text": item})
             continue
+        m = _WALK_TO.match(item)
+        if m:
+            st = {"op": "walk_to", "object": m.group(1).strip(), "text": item}
+            if m.group(2):
+                st["stop_at_m"] = float(m.group(2))
+            steps.append(st)
+            continue
+        m = _TURN_TO.match(item)
+        if m:
+            steps.append({"op": "turn_to", "object": m.group(1).strip(), "text": item})
+            continue
         raise PlanError(
             "cannot parse '{}'.\n"
-            "  walk <N>s[@<v>] | walk <N>m[@<v>] | turn left|right <deg>[@<wz>] |\n"
-            "  turn left|right <N>s[@<wz>] | stand <N>s | stop".format(item))
+            "  walk [forward|backward|left|right] <N>s|<N>m[@<v>] | turn left|right <deg>[@<wz>] |\n"
+            "  turn left|right <N>s[@<wz>] | stand <N>s | stop |\n"
+            "  turn_to <object> | walk_to <object> [stop_at <N>m]".format(item))
     if not steps:
         raise PlanError("empty plan")
     return steps
@@ -327,6 +463,14 @@ def compile_plan(steps, env, limits):
             prims.append(Prim("stop", text=st.get("text", "stop")))
             continue
 
+        if op in OBJECT_OPS:
+            pr = _object_prim(st, what, prims, env, limits)
+            prims.append(pr)
+            total_s += pr.expected_s
+            if op == "walk_to":
+                total_m += limits.obj_max_range_m      # an upper bound: measured at run time
+            continue
+
         if op == "stand":
             dur = float(st["duration_s"])
             if dur < limits.min_primitive_s:
@@ -336,13 +480,30 @@ def compile_plan(steps, env, limits):
             continue
 
         if op == "walk":
-            vx = limits.cruise_vx if st.get("vx") is None else float(st["vx"])
-            env.check("vx", vx, what)
-            if vx <= 0.0:
-                raise PlanError("{}: walking needs vx > 0".format(what))
+            # "vx" here is the walk's SPEED, a magnitude; "direction" picks the axis
+            # and the sign (forward when absent, which is every v1 plan).
+            direction = st.get("direction") or "forward"
+            if direction not in WALK_DIRS:
+                raise PlanError("{}: walk direction must be one of {}, got {!r}"
+                                .format(what, ", ".join(WALK_DIRS), direction))
+            speed = limits.cruise(direction) if st.get("vx") is None else float(st["vx"])
+            if speed <= 0.0:
+                raise PlanError("{}: walking needs a speed > 0 (the direction gives the "
+                                "sign)".format(what))
+            vx, vy = walk_velocity(direction, speed)
+            if direction in ("forward", "backward"):
+                env.check("vx", vx, what)
+            else:
+                env.check("vy", vy, what)
+            if direction != "forward" and limits.perception_guard == "all":
+                raise PlanError(
+                    "{}: perception_guard is 'all', but the camera looks forward: a {} "
+                    "walk cannot be guarded by it. Set perception_guard to 'object' to "
+                    "walk {} unguarded (watch the robot yourself).".format(
+                        what, direction, direction))
             dist = st.get("distance_m")
             err = None
-            achieved = achieved_speed(vx, limits)
+            achieved = achieved_speed(speed, limits, direction)
             if dist is not None:
                 if achieved is None:
                     raise PlanError(
@@ -351,7 +512,10 @@ def compile_plan(steps, env, limits):
                         "  observation and no odometry topic, so distance can only be\n"
                         "  time x a speed. Set v_cal in mission.yaml (a measured\n"
                         "  number, or 'commanded' to assume the command), or ask for\n"
-                        "  a duration instead.".format(what))
+                        "  a duration instead.{}".format(
+                            what, "" if direction == "forward" else
+                            " A measured v_cal is a forward speed; it does not\n"
+                            "  convert a {} walk.".format(direction)))
                 dur = float(dist) / achieved
                 if not limits.v_cal_assumed:
                     err = float(dist) * limits.v_cal_rel_err
@@ -365,8 +529,8 @@ def compile_plan(steps, env, limits):
                     total_m += dist
             if dur < limits.min_primitive_s:
                 raise PlanError(_too_short(what, dur, limits))
-            prims.append(Prim("walk", vx=vx, duration_s=dur, distance_m=dist,
-                              distance_err_m=err, text=st.get("text", "")))
+            prims.append(Prim("walk", vx=vx, vy=vy, direction=direction, duration_s=dur,
+                              distance_m=dist, distance_err_m=err, text=st.get("text", "")))
             total_s += dur
             continue
 
@@ -412,6 +576,91 @@ def compile_plan(steps, env, limits):
     return prims, total_s, total_m
 
 
+def object_estimate_s(op, limits, frame_hz=12.5):
+    """A typical turn_to / walk_to, for the plan's total (it is checked against
+    max_total_s like any step): looks that find the target in confirm_frames frames, a
+    90 / 45 degree first turn, and for walk_to the farthest accepted target at obj_vx."""
+    look = limits.ramp_s + limits.obj_settle_s + limits.obj_confirm_frames / frame_hz
+    if op == "turn_to":
+        return 2 * look + expected_turn_s(90.0, limits.cruise_wz, limits.ramp_s,
+                                          limits.turn_min_wz)
+    walk_m = max(0.0, limits.obj_max_range_m - limits.obj_stop_default_m)
+    n = int(math.ceil(walk_m / max(1e-6, limits.obj_segment_m)))
+    return (n + 1) * look + walk_m / max(limits.obj_vx, WALK_MIN_VX) + \
+        expected_turn_s(45.0, limits.cruise_wz, limits.ramp_s, limits.turn_min_wz)
+
+
+def object_budget_s(op, limits):
+    """The longest a turn_to / walk_to may run before it is called stuck: every look
+    timing out, every correction, and for walk_to every segment. The executor's timeout,
+    not an estimate (object_estimate_s is that)."""
+    look = limits.ramp_s + limits.obj_settle_s + limits.obj_look_timeout_s
+    turn = expected_turn_s(180.0, limits.cruise_wz, limits.ramp_s, limits.turn_min_wz)
+    small = expected_turn_s(limits.obj_align_tol_deg * 3, limits.turn_min_wz or limits.cruise_wz,
+                            limits.ramp_s, limits.turn_min_wz)
+    if op == "turn_to":
+        return look + turn + (1 + limits.obj_max_corrections) * (look + small)
+    walk = limits.obj_max_range_m / max(limits.obj_vx, WALK_MIN_VX) + \
+        limits.obj_max_segments * (limits.ramp_s + look)
+    return look + turn + walk + limits.obj_max_segments * small
+
+
+def _object_prim(st, what, prims, env, limits):
+    """turn_to / walk_to: the checks that do not need the camera. Whether the target is
+    there, unique and confident is decided later, standing still (node.py grounding)."""
+    from . import objects as O
+    op = st["op"]
+    if not limits.perception:
+        raise PlanError("{}: needs the camera, and perception is off in mission.yaml"
+                        .format(what))
+    words = st.get("object") or st.get("object_text") or ""
+    cls = st.get("object_class")
+    if cls is None:
+        cls, why = O.resolve(words)
+        if cls is None:
+            raise PlanError("{}: unknown object: {}".format(what, why))
+    elif cls not in O.SYNONYMS:
+        raise PlanError("{}: unknown object class {!r}".format(what, cls))
+    # One object step per plan, and nothing that moves before it. The operator confirms
+    # the target on a picture taken BEFORE the plan runs; after a walk or a turn, the
+    # object the plan would act on is one nobody has looked at.
+    for p in prims:
+        if p.op in OBJECT_OPS:
+            raise PlanError("{}: only one object step per plan".format(what))
+        if p.op in MOVING_OPS:
+            raise PlanError("{}: an object step must come before any walking or turning: "
+                            "the target is confirmed on a picture taken before the plan "
+                            "starts".format(what))
+    env.check("wz", limits.cruise_wz, what)
+    pr = Prim(op, target_cls=cls, target_text=words or cls, text=st.get("text", ""))
+    if op == "walk_to":
+        env.check("vx", limits.obj_vx, what)
+        stop = st.get("stop_at_m")
+        pr.stop_default = stop is None
+        stop = limits.obj_stop_default_m if stop is None else float(stop)
+        floor = limits.obj_stop_min_m
+        if cls == "person":
+            # The person is also what the safety check stops for: the last walk may
+            # end up to the arrival tolerance short, and must not end inside it.
+            floor = max(floor, limits.obj_person_stop_m + limits.obj_arrive_tol_m)
+        if stop < floor - 1e-9:
+            raise PlanError(
+                "{}: stopping {:.2f} m from a {} is too close: the least is {:.2f} m{}"
+                .format(what, stop, cls, floor,
+                        " (a person nearer than that stops every walk)" if cls == "person"
+                        else " (the camera's obstacle stop would end the walk first)"))
+        if stop > limits.obj_max_range_m - limits.obj_arrive_tol_m:
+            raise PlanError("{}: stopping {:.2f} m away leaves nothing to walk inside the "
+                            "{:.1f} m I trust the depth camera for".format(
+                                what, stop, limits.obj_max_range_m))
+        pr.stop_at_m = stop
+        pr.segment_m = limits.obj_segment_m
+        pr.vx = 0.0
+    pr.expected_s = object_estimate_s(op, limits)
+    pr.budget_s = object_budget_s(op, limits)
+    return pr
+
+
 def _too_short(what, dur, limits):
     return ("{}: {:.2f}s is under the {:.1f}s floor.\n"
             "  Training resampled the velocity command every 10 s, so very short\n"
@@ -441,13 +690,16 @@ def plan_from_json(obj, env, limits):
             raise PlanError("plan[{}]: op must be one of {}, got {!r}"
                             .format(i, ", ".join(OPS), op))
         unknown = set(item) - {"op", "vx", "wz", "duration_s", "distance_m",
-                               "yaw_deg", "direction", "text"}
+                               "yaw_deg", "direction", "text", "object", "object_class",
+                               "stop_at_m"}
         if unknown:
             raise PlanError("plan[{}]: unknown field(s) {}"
                             .format(i, ", ".join(sorted(unknown))))
         if op == "walk" and (("duration_s" in item) == ("distance_m" in item)):
             raise PlanError("plan[{}]: walk needs exactly one of duration_s or "
                             "distance_m".format(i))
+        if op in OBJECT_OPS and not (item.get("object") or item.get("object_class")):
+            raise PlanError("plan[{}]: {} needs an 'object'".format(i, op))
         if op == "turn":
             if item.get("direction") not in ("left", "right"):
                 raise PlanError("plan[{}]: turn needs direction 'left' or 'right'"

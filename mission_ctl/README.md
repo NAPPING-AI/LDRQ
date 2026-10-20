@@ -15,9 +15,12 @@ front end on the same compiler, the same checks and the same executor.
 | `r1_mission/executor.py` | the state machine that runs a plan: ramps, IMU-closed turns, aborts, the report; no ROS |
 | `r1_mission/yaw.py` | heading from the bridge's IMU quaternion, unwrapped |
 | `r1_mission/nl.py` | the English front end: normalize, the model call, provenance check, translate, the reply template |
-| `r1_mission/node.py` | the ROS 2 shell and the CLI: publishers, subscriptions with the bridge's QoS, one process per plan |
-| `config/mission.yaml` | cruise speeds, turn tolerance and minimum rate, budgets, the model server and its placement |
-| `tests/test_core.py`, `tests/test_nl.py` | standard-library test suites; no ROS, no pytest, no robot |
+| `r1_mission/objects.py` | object words → a COCO class, by a table; the "was it said" check (stage E) |
+| `r1_mission/percept.py` | camera frames, picking the one target, a simulated room for dry runs (stage E) |
+| `r1_mission/node.py` | the ROS 2 shell and the CLI: publishers, subscriptions with the bridge's QoS, grounding and the operator's picture, one process per plan |
+| `config/mission.yaml` | cruise speeds, turn tolerance and minimum rate, budgets, the model server and its placement, the object settings |
+| `tests/test_core.py`, `tests/test_nl.py`, `tests/test_objects.py` | standard-library test suites; no ROS, no pytest, no robot |
+| `tests/worlds/room.json` | a simulated room for `--dry-run --world` |
 | `eval/` | the offline English eval sets and runner ([eval/README.md](eval/README.md)) |
 
 ## How to use it
@@ -28,11 +31,14 @@ python3 r1_mission_cli.py capability --json               # the same, machine-re
 python3 r1_mission_cli.py walk --seconds 5 --speed 0.4
 python3 r1_mission_cli.py turn --deg 90 --left            # closed on the IMU heading
 python3 r1_mission_cli.py run "walk 5s@0.4; turn left 90; walk 10m@0.4"
+python3 r1_mission_cli.py run "walk backward 1m@0.3; walk left 3s@0.2"   # v2 policy only (see below)
 python3 r1_mission_cli.py run "..." --dry-run             # simulate and print the command trace; never touches the robot
 python3 r1_mission_cli.py json --file plan.json           # a JSON plan
 python3 r1_mission_cli.py ask "walk 2 meters, then turn left"   # English, parsed by a local model (stage C)
 python3 r1_mission_cli.py ask-check                       # is the model up and answering right? moves nothing
 python3 r1_mission_cli.py ask-check --once                # one request, exactly as `ask` sends it (the health check)
+python3 r1_mission_cli.py run "walk_to the chair stop_at 1.2; turn left 90"   # an object step (stage E)
+python3 r1_mission_cli.py run "turn_to the sofa" --dry-run --world tests/worlds/room.json
 ```
 
 Everything with `--dry-run`, plus `capability` and the tests, runs on any machine with
@@ -45,6 +51,23 @@ The bridge must be `RUNNING` (the executor does not start the first primitive wh
 `WAITING_POLICY`); the handheld must be in **developer mode**, or the factory motion
 service keeps writing `rt/lowcmd` at 500 Hz; before `enable_output:=true`, run the plan
 with `--dry-run`, then once with the interactive confirmation rather than `--yes`.
+
+### Walking backward and sideways (v2 policy)
+
+`walk [forward|backward|left|right] <N>s|<N>m[@<speed>]` (`back` = backward; no word =
+forward). The speed is a magnitude; the direction picks the axis and sign. The directions
+that exist come from the **installed envelope**:
+
+- with v1 (`week04_nohead`) only forward does; backward is outside the trained range and
+  sideways is refused because that axis was pinned to 0;
+- with v2 (`v2_drift_ft`: vx −0.6…1.0, vy ±0.5, wz ±1.57) all four do.
+
+Nothing else switches it: install the bundle and `capability`, `run` and `ask` follow.
+Default speeds are `cruise_back_vx` (0.3) and `cruise_vy` (0.2) in `mission.yaml`, kept low
+until v2 has walked these ways on the robot. A measured `v_cal` is a forward speed, so
+with one a backward or sideways **distance** is refused (a duration is fine). With
+`perception_guard: all`, backward and sideways walks are refused: the camera looks
+forward.
 
 ### `ask`: English instructions
 
@@ -66,6 +89,38 @@ robot:
 2. Turned right 180.2° by my IMU (target 180°; not checked against the floor).
 Done.
 ```
+
+### `turn_to` and `walk_to`: objects the camera sees (stage E)
+
+`turn_to <object>` faces it; `walk_to <object> [stop_at <m>]` walks up to it and stops at
+that distance, measured by the depth camera (1.0 m if none is said, and the plan says it
+is the default). In English: "Face the bottle", "Walk to the woman by the window and stop
+1.5 m from her". They need the perception node (`../perception/`) running.
+
+- **The object is decided by a table, not the model** (`objects.py`). The model copies the
+  words; they must all have been said; the head noun must name exactly one COCO class the
+  table lists. "the door", "the kitchen", "the desk", "me" are refused (`unknown_object`).
+- **One object step per plan, and nothing that moves before it.** The target is confirmed
+  on a picture taken before the plan starts; after a walk, the object would be one nobody
+  looked at. A `stand` before it, and any steps after it, are fine.
+- **Grounding, before `[y/N]`, standing still:** the target must be the only one of its
+  class in view, above `obj_target_conf` in `obj_confirm_frames` frames in a row, and for
+  `walk_to` have a depth reading inside `obj_max_range_m`. Otherwise the plan is refused,
+  with the reason (not seen, two of them and where, not confident enough and the number,
+  no depth). Then the node saves a picture with the target in a red box, and its path is
+  printed: **look at it before answering**.
+- **Execution** (`executor.py`): stand, look again (the same target: same class, within
+  `obj_gate_deg` of where it should be), turn by the camera's bearing closed on the IMU,
+  stand, look; for `walk_to`, walk at most `obj_segment_m` open loop, stand, measure
+  again, until within 0.2 m of the stop distance, then face it. The robot never steers
+  while walking.
+- **The camera guards every walk inside them:** a person within `obj_person_stop_m`, a
+  return in the walking corridor within 0.6 m, or frames older than `obj_stale_s` end the
+  plan at once, standing. `perception_guard: all` extends this to every plain `walk`.
+- **Dry runs** need a simulated room (`--world`): JSON with
+  `{"objects": [{"cls": "chair", "x": 3.0, "y": 1.0, "conf": 0.88}], "hfov_deg": 100}`
+  in meters, x forward, y left from where the robot starts. An object can appear later
+  (`"appear_t": 4.0`), which is how the tests walk a person into the robot's path.
 
 **The model transcribes and the robot judges** (`r1_mission/nl.py`; results and method
 in [docs/stageC_nl_eval.md](../docs/stageC_nl_eval.md)):
@@ -196,6 +251,8 @@ itself is deliberately *not* given it: it transcribes, and the robot judges.
 python3 tests/test_core.py      # no ROS, no pytest, no robot
 python3 tests/test_nl.py        # normalize, translate, provenance, replies, and
                                 # `ask` end to end against a stand-in model server on 127.0.0.1
+python3 tests/test_objects.py   # the object table, grounding, turn_to / walk_to in a simulated
+                                # room, the camera guard (a person stepping in, a camera going quiet)
 python3 eval/run_nl_eval.py --check --set all   # the eval sets agree with the shipped config
 ```
 
@@ -285,5 +342,9 @@ stage C (`ask`, 2026-09-30) of the project; stages are explained in
 - **`ask`:** the held-out English sets scored the same on the Orin as on the dev box
   (77/80), and 11 instructions ran end to end, each executed or refused as asked
   ([docs/stageC_nl_eval.md](../docs/stageC_nl_eval.md)).
-- Tests: `tests/test_core.py` and `tests/test_nl.py` pass on Python 3.8 (the robot's) and
-  3.10; CI runs both on every push (`../run_tests.sh`).
+- **`turn_to` / `walk_to` (stage E, 2026-10-14):** written and tested on the dev box,
+  against a simulated room and against the real perception node on a replayed image; the
+  English prompt with the two new steps was re-evaluated with the model on the CPU. Not yet
+  run on the robot ([docs/stageE_perception.md](../docs/stageE_perception.md)).
+- Tests: all three suites pass on Python 3.8 (the robot's) and 3.10; CI runs them on every
+  push (`../run_tests.sh`).

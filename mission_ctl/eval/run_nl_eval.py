@@ -21,9 +21,10 @@ Stdlib only, Python 3.8: the same script runs on the dev box and on the robot.
   python3 run_nl_eval.py --check                                  # no model: set vs config
   python3 run_nl_eval.py --table results/*.json                   # compare runs
 
-Prompt changes are made against nl_dev.jsonl only. nl_test.jsonl, nl_test2.jsonl
-and nl_test3.jsonl were each written and frozen before the pipeline version they
-first scored (docs/stageC_nl_eval.md). Every result file records the set's sha256
+Prompt changes are made against nl_dev.jsonl and nl_dev_objects.jsonl only.
+nl_test.jsonl, nl_test2.jsonl, nl_test3.jsonl and nl_test4.jsonl (stage E: objects)
+were each written and frozen before the pipeline version they first scored
+(docs/stageC_nl_eval.md, docs/stageE_perception.md). Every result file records the set's sha256
 and the prompt id.
 """
 from __future__ import annotations
@@ -43,11 +44,35 @@ sys.path.insert(0, str(HERE.parent))
 
 from r1_mission import nl          # noqa: E402
 from r1_mission import node as N   # noqa: E402
+from r1_mission import objects as O  # noqa: E402
+from r1_mission import plan as P     # noqa: E402
 
 SETS = {"dev": HERE / "nl_dev.jsonl", "test": HERE / "nl_test.jsonl",
-        "test2": HERE / "nl_test2.jsonl", "test3": HERE / "nl_test3.jsonl"}
-GROUPS = {"heldout": ("test", "test2", "test3"), "all": ("dev", "test", "test2", "test3")}
+        "test2": HERE / "nl_test2.jsonl", "test3": HERE / "nl_test3.jsonl",
+        "devobj": HERE / "nl_dev_objects.jsonl", "test4": HERE / "nl_test4.jsonl",
+        "test5": HERE / "nl_test5.jsonl"}
+# A set written for a policy other than the shipped one carries its envelope here, so
+# --check and the scores use the numbers the set was written for. test5: the v2
+# policy (backward to 0.6 m/s, sideways to 0.5 m/s, turns to 1.57 rad/s).
+# Sets of object steps (stage E): their outcomes assume mission.yaml `perception: on`.
+# A config with the camera off (release v2.0.0 ships without the perception node) skips
+# them in --check rather than calling every case inconsistent.
+SET_NEEDS_PERCEPTION = ("devobj", "test4")
+SET_ENVELOPE = {"test5": ((-0.6, 1.0), (-0.5, 0.5), (-1.57, 1.57), "v2 (nl_test5.jsonl)")}
+# heldout stays the stage C 80, so its numbers stay comparable; stageE adds the objects.
+GROUPS = {"heldout": ("test", "test2", "test3"),
+          "stageE": ("test", "test2", "test3", "test4"),
+          "v2": ("test5",),
+          "all": ("dev", "devobj", "test", "test2", "test3", "test4", "test5")}
 TOL_ABS, TOL_REL = 0.02, 0.01
+
+
+def set_envelope(name, env):
+    """The envelope a set is judged against: its own if it has one, else the shipped."""
+    if name in SET_ENVELOPE:
+        vx, vy, wz, src = SET_ENVELOPE[name]
+        return P.Envelope(vx, vy, wz, source=src)
+    return env
 
 
 def load_cases(path):
@@ -80,7 +105,12 @@ def steps_equal(got, want):
             dflt = "forward" if op == "walk" else "left"
             if g.get("direction", dflt) != w.get("direction", dflt):
                 return False
-        keys = ("distance_m", "duration_s", "angle_deg", "speed_mps", "rate_rad_s", "within_s")
+        if op in ("turn_to", "walk_to"):
+            # The words may differ ("the chair" / "chair"); what they resolve to may not.
+            if O.resolve(g.get("object") or "")[0] != O.resolve(w.get("object") or "")[0]:
+                return False
+        keys = ("distance_m", "duration_s", "angle_deg", "speed_mps", "rate_rad_s", "within_s",
+                "stop_at_m")
         gk = set(k for k in keys if g.get(k) is not None)
         wk = set(k for k in keys if w.get(k) is not None)
         if gk != wk:
@@ -99,7 +129,13 @@ def prims_equal(got, want):
     for g, w in zip(got, want):
         if g.op != w.op or g.closed_loop != w.closed_loop:
             return False
-        if abs(g.vx - w.vx) > 0.011 or abs(g.wz - w.wz) > 0.011:
+        if g.op in ("turn_to", "walk_to"):
+            if g.target_cls != w.target_cls or (g.stop_at_m is None) != (w.stop_at_m is None):
+                return False
+            if g.stop_at_m is not None and abs(g.stop_at_m - w.stop_at_m) > 0.011:
+                return False
+            continue
+        if abs(g.vx - w.vx) > 0.011 or abs(g.vy - w.vy) > 0.011 or abs(g.wz - w.wz) > 0.011:
             return False
         if (g.duration_s is None) != (w.duration_s is None):
             return False
@@ -144,7 +180,8 @@ def score(case, u, env, lim):
     got_steps = (u.transcript or {}).get("steps") if isinstance(u.transcript, dict) else None
     valid = (isinstance(got_steps, list) and len(got_steps) > 0 and
              all(isinstance(s, dict) and s.get("op") in
-                 ("walk", "turn", "stand", "stop", "unsupported") for s in got_steps))
+                 ("walk", "turn", "stand", "stop", "unsupported", "turn_to", "walk_to")
+                 for s in got_steps))
     exact = any(steps_equal(got_steps, [dict(s) for s in c]) for c in case["expect"])
     if case["outcome"] == "execute":
         correct = u.outcome == "execute" and any(
@@ -244,6 +281,8 @@ def run(args, model, cases, env, lim, set_name, set_path):
             "backend": args.backend, "url": args.url, "server_version": server,
             "options": be.options, "schema": not args.json_mode,
             "normalize": not args.no_normalize, "prompt_id": nl.prompt_id(lim),
+            "envelope": {"vx": list(env.vx), "vy": list(env.vy), "wz": list(env.wz),
+                         "source": env.source},
             "host": platform.node(), "machine": platform.machine(),
             "python": platform.python_version(),
             "when": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "cold_s": round(cold_s, 3),
@@ -316,7 +355,11 @@ def main(argv=None):
         rc = 0
         for name, path in sets:
             cases = load_cases(path)
-            bad = check_cases(cases, env, lim)
+            if name in SET_NEEDS_PERCEPTION and not lim.perception:
+                print("{}: {} cases, sha256 {}, skipped: object steps, and mission.yaml has "
+                      "perception off".format(name, len(cases), sha256(path)[:16]))
+                continue
+            bad = check_cases(cases, set_envelope(name, env), lim)
             print("{}: {} cases, sha256 {}, {}".format(
                 name, len(cases), sha256(path)[:16], "consistent with the config" if not bad
                 else "{} INCONSISTENT".format(len(bad))))
@@ -330,7 +373,7 @@ def main(argv=None):
     rc = 0
     for model in args.model:
         for name, path in sets:
-            res = run(args, model, load_cases(path), env, lim, name, path)
+            res = run(args, model, load_cases(path), set_envelope(name, env), lim, name, path)
             if res is None:
                 rc = 3
                 continue

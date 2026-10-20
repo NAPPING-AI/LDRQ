@@ -34,6 +34,7 @@ import time
 import urllib.error
 import urllib.request
 
+from . import objects as O
 from . import plan as P
 
 # ----------------------------------------------------------------- normalize
@@ -195,7 +196,10 @@ def normalize(text):
     t = re.sub(NUM + r" (?:full )?(?:turns|rotations|revolutions|circles)\b",
                lambda m: "{} degrees".format(_fmt(float(m.group(1)) * 360.0)), t)
     t = re.sub(r"\bu[ -]?turn\b", "180 degree turn", t)
-    t = re.sub(r"\bturn around\b", "turn 180 degrees", t)
+    # ... but not "turn around to face the dog": that is turn_to, and 180 would be a
+    # number nobody said (dev set, stage E).
+    t = re.sub(r"\bturn around\b(?!\s+(?:to\s+(?:face|look\s+at|see)|and\s+(?:face|look\s+at)"
+               r"|towards?|toward))", "turn 180 degrees", t)
     t = re.sub(r"\babout[ -]face\b", "turn 180 degrees", t)
     # Fractions and articles in front of a unit. The order matters: "1 and a half
     # meters" must be read before "a half meters" can match inside it, and "half a
@@ -255,7 +259,9 @@ Step types:
 - turn: direction is left or right. Add angle_deg if an angle is given, or duration_s if a time is given, otherwise neither. Add rate_rad_s only if a turn rate in rad/s is given. Add within_s only for an angle with a time limit, like "90 degrees in 3 seconds".
 - stand: stand still or wait. Add duration_s if a time is given.
 - stop: stop moving.
-- unsupported: anything that is not walking, turning, standing or stopping, such as jumping, climbing, sitting, picking something up, going to a place or an object, following someone, dancing or talking. Put the request in "what".
+- turn_to: turn to face a thing or a person that is named, also said as "look at it", "turn towards it" or "turn around to face it". Copy the words that name it into "object", exactly as written, like "the red chair".
+- walk_to: walk up to a thing or a person that is named. Copy the words that name it into "object" the same way. Add stop_at_m only if a distance to stop from it is given, like "stop 1 m before it" or "2 m away from it".
+- unsupported: anything that is not walking, turning, standing, stopping, turning to something or walking to something, such as jumping, climbing, sitting, picking something up, going to a room or a place, following someone, dancing or talking. Put the request in "what".
 
 Rules:
 - One step per action, in the order given. Write repeated actions out in full ("twice", "three times").
@@ -264,7 +270,8 @@ Rules:
 - A walk with no direction is forward. "back up", "reverse" and "walk backwards" are walk backward. "strafe", "sidestep", "slide" and "shuffle" to a side are walk left or right. "walk back" or "come back" after turning around means walking forward to return.
 - A turn with no amount has no angle_deg. A turn with no direction is left.
 - Vague amounts such as "a bit", "a little", "slightly", "some more", "further" or "a few steps" are not numbers: leave the amount out.
-- Words such as "slowly" or "quickly" do not add a speed."""
+- Words such as "slowly" or "quickly" do not add a speed.
+- "object" holds only words from the instruction. Never name a thing that was not mentioned."""
 
 # Worked examples, in normalized form, except the last: "twice:" is expanded by
 # normalize() before any operator text reaches the model, but the example still
@@ -290,6 +297,11 @@ EXAMPLES = [
     ("walk 1.5 m in 3 seconds, then open the door",
      {"steps": [{"op": "walk", "direction": "forward", "distance_m": 1.5, "within_s": 3},
                 {"op": "unsupported", "what": "open the door"}]}),
+    ("face the bottle, then wait 2 seconds",
+     {"steps": [{"op": "turn_to", "object": "the bottle"},
+                {"op": "stand", "duration_s": 2}]}),
+    ("go over to the woman by the window and stop 1.5 m from her",
+     {"steps": [{"op": "walk_to", "object": "the woman by the window", "stop_at_m": 1.5}]}),
     ("twice: turn 45 degrees at 0.2 rad/s and walk 1 m at 0.3 m/s",
      {"steps": [{"op": "turn", "direction": "left", "angle_deg": 45, "rate_rad_s": 0.2},
                 {"op": "walk", "direction": "forward", "distance_m": 1, "speed_mps": 0.3},
@@ -328,6 +340,12 @@ def transcription_schema(lim):
         obj({"op": {"const": "stand"}, "duration_s": num}, ["op", "duration_s"]),
         obj({"op": {"const": "stand"}}, ["op"]),
         obj({"op": {"const": "stop"}}, ["op"]),
+        obj({"op": {"const": "turn_to"}, "object": {"type": "string", "maxLength": 60}},
+            ["op", "object"]),
+        obj({"op": {"const": "walk_to"}, "object": {"type": "string", "maxLength": 60},
+             "stop_at_m": num}, ["op", "object", "stop_at_m"]),
+        obj({"op": {"const": "walk_to"}, "object": {"type": "string", "maxLength": 60}},
+            ["op", "object"]),
         obj({"op": {"const": "unsupported"}, "what": {"type": "string", "maxLength": 80}},
             ["op", "what"]),
     ]
@@ -346,9 +364,11 @@ def messages(text):
     return msgs
 
 
-# The prompt the offline eval was run with (docs/stageC_nl_eval.md). tests/test_nl.py
-# fails if the shipped prompt differs, so a prompt edit cannot ship without a re-run.
-EVALUATED_PROMPT_ID = "c0c08d6816ca"
+# The prompt the offline eval was run with. tests/test_nl.py fails if the shipped prompt
+# differs, so a prompt edit cannot ship without a re-run. c0c08d6816ca was stage C's
+# (docs/stageC_nl_eval.md); 2bb25e8e2ecc adds turn_to / walk_to, scored 2026-10-14 on the
+# stage C sets and the frozen object set, the model on the CPU (docs/stageE_perception.md).
+EVALUATED_PROMPT_ID = "2bb25e8e2ecc"
 
 
 def prompt_id(lim):
@@ -511,11 +531,12 @@ def make_backend(kind, url, model, timeout_s=120.0, options=None, schema=True):
 
 # ---------------------------------------------------------------- translate
 REASONS = ("backward", "sideways", "unsupported", "no_amount", "too_fast",
-           "too_small", "limits", "invalid", "empty")
+           "too_small", "limits", "invalid", "empty", "unknown_object", "object_order",
+           "no_camera")
 
 # Slowest walk the NL front end will slow a short walk down to. 0.1 m/s is the
 # slowest command the real robot has walked at (PG-2, 2026-09-28, untethered).
-WALK_MIN_VX = 0.1
+WALK_MIN_VX = P.WALK_MIN_VX
 
 
 class _Bad(Exception):
@@ -563,6 +584,12 @@ def step_text(s):
                           if s.get("duration_s") is not None else "")
     if op == "stop":
         return "stop"
+    if op == "turn_to":
+        return "turn to {}".format(s.get("object") or "?")
+    if op == "walk_to":
+        return "walk to {}{}".format(s.get("object") or "?",
+                                     ", stop {} m from it".format(f("stop_at_m"))
+                                     if s.get("stop_at_m") is not None else "")
     if op == "unsupported":
         return str(s.get("what") or "something I cannot do")
     return json.dumps(s, ensure_ascii=False)
@@ -579,26 +606,44 @@ def min_turn_deg(lim):
     return math.degrees(lim.turn_min_wz * lim.min_primitive_s)
 
 
+def _walk_words(env):
+    """The trained walk directions in words: "forward" for v1."""
+    dirs = env.walk_dirs()
+    words = [d for d in dirs if d in ("forward", "backward")]
+    if "left" in dirs or "right" in dirs:
+        words.append("sideways" if ("left" in dirs and "right" in dirs)
+                     else "to the " + ("left" if "left" in dirs else "right"))
+    if not words:
+        return "nowhere"
+    return words[0] if len(words) == 1 else ", ".join(words[:-1]) + " or " + words[-1]
+
+
 def refusal_message(reason, env, lim, text, detail=None):
     """One deterministic English sentence per reason, from the deployed numbers."""
     vmax = env.vx[1]
     wmax = max(abs(env.wz[0]), abs(env.wz[1]))
     if reason == "backward":
-        why = ("my forward speed was never negative in training" if env.vx[0] >= 0.0
-               else "my mission layer has no backward step")
-        return ("I cannot walk backward ({}): {}. I can turn around (180 degrees) and "
-                "walk forward instead.".format(text, why))
+        # only reached when the envelope has no backward walking (v1)
+        return ("I cannot walk backward ({}): my forward speed was never negative in "
+                "training. I can turn around (180 degrees) and walk forward instead."
+                .format(text))
     if reason == "sideways":
         why = ("that axis was fixed at zero for all of my training" if env.pinned("vy")
-               else "my mission layer has no sideways step")
+               else "I was trained to step only to the {}".format(
+                   " and ".join(d for d in ("left", "right") if d in env.walk_dirs())))
         return ("I cannot move sideways ({}): {}. I can turn 90 degrees and walk "
                 "forward instead.".format(text, why))
     if reason == "unsupported":
-        return ("I cannot {}: I can only walk forward, turn on the spot and stand "
-                "still, one step after another.".format(text))
+        return ("I cannot {}: I can only walk {}, turn on the spot and stand "
+                "still, one step after another.".format(text, _walk_words(env)))
     if reason == "no_amount":
         return ("'{}' has no amount. Tell me how far (meters), how long (seconds) or "
                 "how many degrees.".format(text))
+    if reason == "too_fast" and isinstance(detail, tuple):
+        need, direction, vdir = detail      # a backward or sideways walk
+        return ("'{}' needs {}; I walk {} at up to {:.2f} m/s.".format(
+            text, need, direction if direction == "backward" else "to the " + direction,
+            vdir))
     if reason == "too_fast":
         return ("'{}' needs {}; I walk at up to {:.2f} m/s and turn at up to {:.2f} "
                 "rad/s.".format(text, detail or "more than I can do", vmax, wmax))
@@ -606,6 +651,13 @@ def refusal_message(reason, env, lim, text, detail=None):
         return ("'{}' is too small: {}.".format(text, detail or "below what I can do"))
     if reason == "limits":
         return "I will not run this plan: {}".format(detail or text)
+    if reason == "unknown_object":
+        return ("I cannot {}: {}. I can find {}.".format(
+            text, detail or "I do not know that object", ", ".join(O.known_kinds())))
+    if reason == "object_order":
+        return ("I cannot {}: {}.".format(text, detail))
+    if reason == "no_camera":
+        return "I cannot {}: my camera is switched off (mission.yaml perception).".format(text)
     if reason == "empty":
         return "I did not find anything to do in that."
     return "I could not make sense of '{}'{}.".format(text, ": " + detail if detail else "")
@@ -640,14 +692,47 @@ def translate(transcript, env, lim):
 
     vmax = env.vx[1]
     wmax = max(abs(env.wz[0]), abs(env.wz[1]))
+    moved = False                   # a moving step came before (object steps must not follow one)
+    n_obj = 0
     for i, s in enumerate(transcript["steps"]):
         if not isinstance(s, dict):
             refuse(i, s, "invalid", "not an object")
             continue
         op = s.get("op")
         text = step_text(s)
+        if op in P.MOVING_OPS and op not in P.OBJECT_OPS:
+            moved = True
         try:
-            if op == "unsupported":
+            if op in P.OBJECT_OPS:
+                words = s.get("object")
+                if not isinstance(words, str) or not words.strip():
+                    raise _Bad("{} without an object".format(op))
+                n_obj += 1
+                if not lim.perception:
+                    refuse(i, s, "no_camera")
+                    continue
+                if s.get("_unsaid"):
+                    refuse(i, s, "unknown_object", "'{}' is not what you said".format(words))
+                    continue
+                cls, why = O.resolve(words)
+                if cls is None:
+                    refuse(i, s, "unknown_object", why)
+                    continue
+                if n_obj > 1:
+                    refuse(i, s, "object_order", "I can go for one object per instruction")
+                    continue
+                if moved:
+                    refuse(i, s, "object_order",
+                           "I find the {} on a picture you confirm before I move, so it has to "
+                           "come before any walking or turning".format(cls))
+                    continue
+                st = {"op": op, "object": words.strip(), "object_class": cls, "text": text}
+                stop = _num(s, "stop_at_m")
+                if op == "walk_to" and stop is not None:
+                    st["stop_at_m"] = stop
+                steps.append(st)
+                moved = True
+            elif op == "unsupported":
                 refuse(i, s, "unsupported")
             elif op == "stop":
                 steps.append({"op": "stop", "text": text})
@@ -659,14 +744,15 @@ def translate(transcript, env, lim):
                     steps.append({"op": "stand", "duration_s": dur, "text": text})
             elif op == "walk":
                 direction = s.get("direction", "forward")
-                if direction == "backward":
-                    refuse(i, s, "backward")
-                    continue
-                if direction in ("left", "right"):
-                    refuse(i, s, "sideways")
-                    continue
-                if direction != "forward":
+                if direction not in WALK_DIRS:
                     raise _Bad("unknown walk direction {!r}".format(direction))
+                # A direction is walked only if the deployed policy was trained for it
+                # (v2: backward and sideways; v1: forward only).
+                if direction not in env.walk_dirs():
+                    refuse(i, s, "backward" if direction == "backward" else "sideways")
+                    continue
+                vmax_dir = env.walk_max(direction)
+                cruise = lim.cruise(direction)
                 dist, dur = _num(s, "distance_m"), _num(s, "duration_s")
                 spd, within = _num(s, "speed_mps"), _num(s, "within_s")
                 if dist is not None and dur is not None:
@@ -684,11 +770,12 @@ def translate(transcript, env, lim):
                         raise _Bad("speed {} m/s and '{} m in {} s' disagree".format(
                             _fmt(spd), _fmt(dist), _fmt(within)))
                     vx = spd
-                if vx is not None and vx > vmax + 1e-9:
-                    refuse(i, s, "too_fast", "{:.2f} m/s".format(vx))
+                if vx is not None and vx > vmax_dir + 1e-9:
+                    refuse(i, s, "too_fast", "{:.2f} m/s".format(vx) if direction == "forward"
+                           else ("{:.2f} m/s".format(vx), direction, vmax_dir))
                     continue
-                if vx is None and dist is not None and lim.cruise_vx > 0.0 \
-                        and dist / lim.cruise_vx < lim.min_primitive_s:
+                if vx is None and dist is not None and cruise > 0.0 \
+                        and dist / cruise < lim.min_primitive_s:
                     vx = _floor4(dist / lim.min_primitive_s)
                     if vx < WALK_MIN_VX - 1e-9:
                         refuse(i, s, "too_small",
@@ -698,6 +785,8 @@ def translate(transcript, env, lim):
                                    WALK_MIN_VX))
                         continue
                 st = {"op": "walk", "text": text}
+                if direction != "forward":
+                    st["direction"] = direction
                 if dist is not None:
                     st["distance_m"] = dist
                 else:
@@ -803,7 +892,8 @@ def parse_transcript(raw):
 
 # Each amount field and the unit it must carry in the normalized instruction.
 AMOUNT_UNITS = (("distance_m", r" m(?![/\w])"), ("duration_s", r" seconds\b"),
-                ("within_s", r" seconds\b"), ("angle_deg", r" degrees\b"))
+                ("within_s", r" seconds\b"), ("angle_deg", r" degrees\b"),
+                ("stop_at_m", r" m(?![/\w])"))
 
 
 def drop_invented(transcript, said):
@@ -842,6 +932,26 @@ def drop_invented(transcript, said):
     return out, dropped
 
 
+def drop_unsaid_objects(transcript, said):
+    """The object words must be the operator's: a step whose object contains a word that
+    was not said loses its object, and is then refused (unknown_object). The same
+    guarantee drop_invented gives numbers, for the words the model copies."""
+    dropped = []
+    if not isinstance(transcript, dict) or not isinstance(transcript.get("steps"), list):
+        return transcript, dropped
+    steps = []
+    for i, s in enumerate(transcript["steps"]):
+        if isinstance(s, dict) and s.get("op") in P.OBJECT_OPS and \
+                isinstance(s.get("object"), str) and not O.said(s["object"], said):
+            dropped.append({"step": i + 1, "field": "object", "value": s["object"]})
+            s = dict(s)
+            s["_unsaid"] = True      # translate() refuses it; the words stay for the message
+        steps.append(s)
+    out = dict(transcript)
+    out["steps"] = steps
+    return out, dropped
+
+
 def judge(u, env, lim):
     """Fill in the robot's decision on an Understood whose transcript is set."""
     if u.transcript is None:
@@ -849,6 +959,8 @@ def judge(u, env, lim):
                        "message": "The model's answer was not valid JSON."}]
         return u
     checked, u.invented = drop_invented(u.transcript, u.said)
+    checked, unsaid = drop_unsaid_objects(checked, u.said)
+    u.invented += unsaid
     u.steps, u.refusals = translate(checked, env, lim)
     if u.refusals:
         return u
@@ -923,7 +1035,10 @@ def render_report(rep, prims):
         head = "{}.".format(i + 1)
         if op == "walk" and p is not None:
             d = r.get("est_distance_m")     # already scaled for an interrupted walk
-            s ="{} Walked forward for {:.1f} s at {:.2f} m/s".format(head, t or 0.0, p.vx)
+            s = "{} Walked {} for {:.1f} s at {:.2f} m/s".format(
+                head, "to the " + p.direction if p.direction in ("left", "right")
+                else p.direction, t or 0.0, abs(p.vy if p.direction in ("left", "right")
+                                                 else p.vx))
             if d is not None:
                 if r.get("est_err_m") is not None:
                     s += ": about {:.1f} +- {:.1f} m (time x calibrated speed; no odometry)".format(
@@ -943,6 +1058,28 @@ def render_report(rep, prims):
         elif op == "turn" and p is not None:
             lines.append("{} Turned {} for {:.1f} s at {:.2f} rad/s (open loop; the angle "
                          "was not measured).".format(head, _side(p.wz), t or 0.0, abs(p.wz)))
+        elif op == "turn_to":
+            s = "{} Turned {} {:.1f}° by my IMU to face the {}".format(
+                head, _side(r.get("turned_deg") or 0.0), abs(r.get("turned_deg") or 0.0),
+                r.get("target"))
+            if r.get("final_bearing_deg") is not None and not r.get("aborted"):
+                s += "; my camera has it {:.1f}° to my {}".format(
+                    abs(r["final_bearing_deg"]), _side(r["final_bearing_deg"]))
+            lines.append(s + ".")
+            if r.get("note"):
+                lines[-1] += " ({}).".format(r["note"])
+        elif op == "walk_to":
+            segs = r.get("segments") or []
+            s = "{} Walked toward the {} in {} piece{} (about {:.1f} m, time x commanded speed)".format(
+                head, r.get("target"), len(segs), "" if len(segs) == 1 else "s",
+                r.get("walked_est_m") or 0.0)
+            if r.get("final_range_m") is not None and not r.get("aborted"):
+                s += "; stopped {:.2f} m from it by my depth camera (asked {:.2f}{})".format(
+                    r["final_range_m"], r.get("stop_at_m") or 0.0,
+                    ", the default" if r.get("stop_default") else "")
+            elif r.get("final_range_m") is not None:
+                s += "; last measured {:.2f} m from it".format(r["final_range_m"])
+            lines.append(s + ".")
         elif op == "stand":
             lines.append("{} Stood still for {:.1f} s.".format(head, t or 0.0))
         elif op == "stop":

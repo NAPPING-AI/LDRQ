@@ -8,6 +8,12 @@
 # Default speeds when a command does not name one.
 cruise_vx: 0.4           # m/s, inside the trained [0, 1.0]
 cruise_wz: 0.4           # rad/s, inside the trained [-0.5, 0.5]
+# Backward and sideways walks: only with a policy trained for them (v2, envelope
+# vx >= -0.6, |vy| <= 0.5); with v1 installed they are refused whatever these say.
+# Speeds are magnitudes. Kept low for the first real runs: v2 has not walked
+# backward or sideways on the robot yet, and the camera only looks forward.
+cruise_back_vx: 0.3
+cruise_vy: 0.2
 
 # Ground speed, the only thing that turns a distance into a time: there is no
 # base linear velocity in the 425-dim observation and no odometry topic.
@@ -69,7 +75,34 @@ llm_timeout_s: 120
 # Robot, 2026-09-30: on the GPU the policy's inference p99 rose to 5.0 ms and the
 # setpoint lag p95 to 5.1 ms. That misses plan 3.6's targets (2 ms, idle + 1 ms) and
 # keeps every limit of the control loop; nothing misbehaved. 4 CPU threads met both
-# (542 us, 0.9 ms). Decision (user, 2026-09-30): stay on the GPU, optimize the GPU side
-# later (docs/system_architecture.md). The CPU is `llm_num_gpu: 0` + `llm_num_thread: 4`.
-llm_num_gpu: -1
-llm_num_thread: 0        # CPU threads when on the CPU; 0 = Ollama's default (every core)
+# (542 us, 0.9 ms) at 21 tok/s. Decision (user, 2026-09-30): stay on the GPU.
+# Decision (user, 2026-10-14, stage E): the CPU, 4 threads -- the GPU is the walking
+# policy's and the detector's. Every request carries these options (llm_options()).
+llm_num_gpu: 0
+llm_num_thread: 4        # CPU threads when on the CPU; 0 = Ollama's default (every core)
+
+# ---- stage E: turn_to / walk_to (docs/stageE_perception.md) ----
+# The camera node is perception/ (its own perception.yaml decides what is published
+# and the per-frame safety facts); these decide what the mission ACTS on.
+perception: on           # off: turn_to / walk_to are refused
+perception_guard: object # object: camera-guard the walks inside turn_to / walk_to
+                         # all: every walk needs fresh frames, stops for people/obstacles
+                         # off: no camera guard on plain walks (object steps keep theirs)
+obj_target_conf: 0.5     # PROBE: from tools/eval_detect.py on robot images
+obj_confirm_frames: 3    # consecutive frames that must agree before a target counts
+obj_gate_deg: 20         # the same target between looks: within this of where expected
+obj_look_timeout_s: 3.0
+obj_settle_s: 1.0        # stand this long after stopping before frames count
+obj_stale_s: 0.5         # a camera-guarded walk stops if the newest frame is older
+obj_turn_tol_deg: 5      # turn_to: facing within this is done
+obj_max_corrections: 2
+obj_align_tol_deg: 8     # walk_to: turn first when the target is further off than this
+obj_segment_m: 1.0       # walk_to: longest walk between two measurements
+obj_vx: 0.3
+obj_stop_default_m: 1.0  # walk_to when no distance was said (shown in the plan)
+obj_stop_min_m: 0.8      # above perception.yaml obstacle_stop_m (0.6)
+obj_max_range_m: 5.0     # PROBE: how far the depth camera is trusted
+obj_max_segments: 10
+obj_person_stop_m: 1.2   # = perception.yaml person_stop_m
+obj_snapshot_dir: ~/r1_snapshots
+obj_snapshot_http_port: 0  # = perception.yaml snapshot_http_port, only for the hint printed

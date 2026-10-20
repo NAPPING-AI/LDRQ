@@ -115,7 +115,7 @@ print("\n== schema ==")
 sch = nl.transcription_schema(LIM)
 check("steps capped at max_prims", sch["properties"]["steps"]["maxItems"] == LIM.max_prims)
 variants = sch["properties"]["steps"]["items"]["anyOf"]
-check("ten step shapes", len(variants) == 10, len(variants))
+check("thirteen step shapes (stage E adds turn_to and two walk_to)", len(variants) == 13, len(variants))
 check("every shape is closed", all(v["additionalProperties"] is False for v in variants))
 check("walk can say backward and sideways (so the robot can refuse them)",
       set(variants[0]["properties"]["direction"]["enum"]) ==
@@ -156,12 +156,78 @@ check("...with the way to do it instead", "turn around" in u.refusals[0]["messag
 u = judged("strafe left 2 m", [{"op": "walk", "direction": "left", "distance_m": 2}])
 check("sideways is refused, from the pinned axis", u.reasons == ["sideways"]
       and "fixed at zero" in u.refusals[0]["message"], u.refusals)
-wide = P.Envelope([0.0, 1.0], [-0.3, 0.3], [-0.5, 0.5])
-u = nl.Understood("strafe left 2 m")
-u.transcript = {"steps": [{"op": "walk", "direction": "left", "distance_m": 2}]}
-nl.judge(u, wide, LIM)
-check("with vy trained, the reason changes (no sideways step in mission_ctl)",
-      u.reasons == ["sideways"] and "no sideways step" in u.refusals[0]["message"])
+
+
+def judged_env(text, steps, env):
+    u = nl.Understood(text)
+    u.transcript = {"steps": steps}
+    return nl.judge(u, env, LIM)
+
+
+# v2 (2026-10-16): trained backward to 0.6 m/s and sideways to 0.5 m/s. The same
+# transcripts now execute; nothing about the model or its prompt changed.
+V2 = P.Envelope([-0.6, 1.0], [-0.5, 0.5], [-1.57, 1.57], source="v2")
+u = judged_env("strafe left 2 m", [{"op": "walk", "direction": "left", "distance_m": 2}], V2)
+check("v2: strafe left executes, at cruise_vy on +vy",
+      u.outcome == "execute" and u.prims[0].direction == "left"
+      and abs(u.prims[0].vy - LIM.cruise_vy) < 1e-9 and u.prims[0].vx == 0.0, u.refusals)
+check("v2: ... and lasts distance / speed",
+      abs(u.prims[0].duration_s - 2.0 / LIM.cruise_vy) < 1e-6, u.prims[0].duration_s)
+u = judged_env("walk backward 1 m", [{"op": "walk", "direction": "backward",
+                                      "distance_m": 1}], V2)
+check("v2: backward executes, at -cruise_back_vx",
+      u.outcome == "execute" and abs(u.prims[0].vx + LIM.cruise_back_vx) < 1e-9
+      and u.prims[0].vy == 0.0, u.refusals)
+u = judged_env("sidestep right for 4 seconds", [{"op": "walk", "direction": "right",
+                                                 "duration_s": 4}], V2)
+check("v2: right is -vy", u.outcome == "execute" and u.prims[0].vy < 0.0, u.refusals)
+u = judged_env("back up 2 m at 0.8 m/s", [{"op": "walk", "direction": "backward",
+                                           "distance_m": 2, "speed_mps": 0.8}], V2)
+check("v2: backward faster than trained is too fast, with the backward limit",
+      u.reasons == ["too_fast"] and u.refusals[0]["message"].endswith(
+          "needs 0.80 m/s; I walk backward at up to 0.60 m/s."),
+      u.refusals)
+u = judged_env("walk forward 2 m at 0.8 m/s", [{"op": "walk", "direction": "forward",
+                                                "distance_m": 2, "speed_mps": 0.8}], V2)
+check("v2: 0.8 m/s forward is still fine", u.outcome == "execute", u.refusals)
+u = judged_env("walk backward 0.3 m", [{"op": "walk", "direction": "backward",
+                                        "distance_m": 0.3}], V2)
+check("v2: a short backward walk is slowed to last min_primitive_s",
+      u.outcome == "execute" and abs(u.prims[0].duration_s - LIM.min_primitive_s) < 1e-3,
+      (u.refusals, u.prims and u.prims[0].duration_s))
+left_only = P.Envelope([0.0, 1.0], [0.0, 0.3], [-0.5, 0.5])
+u = judged_env("step right 1 m", [{"op": "walk", "direction": "right", "distance_m": 1}],
+               left_only)
+check("an envelope with only +vy refuses right, naming the side it has",
+      u.reasons == ["sideways"] and "only to the left" in u.refusals[0]["message"],
+      u.refusals)
+u = judged_env("dance", [{"op": "unsupported", "what": "dance"}], V2)
+check("v2: 'unsupported' names every trained walk direction",
+      "walk forward, backward or sideways" in u.refusals[0]["message"], u.refusals)
+u = judged("dance", [{"op": "unsupported", "what": "dance"}])
+check("v1: 'unsupported' text unchanged",
+      "I can only walk forward, turn on the spot" in u.refusals[0]["message"], u.refusals)
+u = judged_env("walk backward 1 m then strafe left 1 m",
+               [{"op": "walk", "direction": "backward", "distance_m": 1},
+                {"op": "walk", "direction": "left", "distance_m": 1}], V2)
+e = ex.Executor(u.prims, LIM)
+t, seen = 0.0, []
+while t < 60.0:
+    out = e.step(t, yaw=0.0, bridge_state="RUNNING")
+    seen.append(out.as_tuple())
+    if out.state in (ex.DONE, ex.ABORTED):
+        break
+    t += 0.02
+# Both axes are non-zero only inside the 0.5 s ramp between the two walks; a mixed
+# (vx, vy) command is in distribution (training sampled the axes independently).
+both = sum(1 for v in seen if v[0] < -0.01 and v[1] > 0.01)
+check("v2: the executor publishes -vx, then +vy; both only during the ramp",
+      e.state == ex.DONE and min(v[0] for v in seen) < -0.29
+      and max(v[1] for v in seen) > 0.19 and both <= LIM.ramp_s / 0.02 + 1,
+      (e.state, both))
+rep = nl.render_report(e.report(), u.prims)
+check("v2: the report says backward and to the left",
+      "Walked backward for" in rep and "Walked to the left for" in rep, rep)
 u = judged("walk 2 m, then jump", [{"op": "walk", "direction": "forward", "distance_m": 2},
                                    {"op": "unsupported", "what": "jump"}])
 check("all or nothing: one refused step refuses the plan",
@@ -426,8 +492,11 @@ check("a dead model exits 3 with the restart hint", code == 3
       and "ollama_ctl.sh restart" in out, out)
 code, out = cli(["ask-check", "--llm-url", URL, "--model", "m"])
 check("ask-check passes against a right answer", code == 0 and "OK:" in out, out)
-check("ask-check on the shipped config names the GPU default and sends no placement",
-      "Ollama's default (the GPU)" in out and "num_gpu" not in SEEN[-1]["options"], out)
+# Shipped placement since stage E (user, 2026-10-14): the CPU, 4 threads.
+check("ask-check on the shipped config sends the shipped CPU placement",
+      'placement {"num_gpu": 0, "num_thread": 4}' in out
+      and SEEN[-1]["options"].get("num_gpu") == 0
+      and SEEN[-1]["options"].get("num_thread") == 4, out)
 # The health check in llm/ollama_ctl.sh is `ask-check --once`. It must send exactly
 # what `ask` sends: Ollama reloads the model when a request asks for another
 # placement (stage C: a bare health generate would have put a CPU-placed model back

@@ -67,8 +67,8 @@ check("turn by seconds is not read as degrees",
 check("comments and blank lines skipped",
       len(P.parse_script("# hi\n\nwalk 3s\n")) == 1)
 refuses("gibberish is refused", lambda: P.parse_script("fly 3s"), "cannot parse")
-refuses("strafe has no syntax at all", lambda: P.parse_script("strafe left 2m"),
-        "cannot parse")
+refuses("strafe has no syntax at all (it is 'walk left')",
+        lambda: P.parse_script("strafe left 2m"), "cannot parse")
 
 print("\n== envelope ==")
 lim = P.Limits(v_cal=0.35, cruise_vx=0.4, cruise_wz=0.4)
@@ -89,13 +89,16 @@ check("capability prose says it cannot walk backward",
 check("operator view still available in Chinese", "不能横移" in TRAINED.describe("zh"))
 wide = P.Envelope([0.0, 1.0], [-0.3, 0.3], [-0.5, 0.5])
 check("a retrained policy with vy changes the prose with no hand edit",
-      "can move sideways" in wide.describe() and "cannot move sideways" not in wide.describe())
+      "can step sideways" in wide.describe() and "cannot move sideways" not in wide.describe())
 
 refuses("vx above the trained range",
         lambda: P.compile_plan(P.parse_script("walk 5s@1.5"), TRAINED, lim), "outside")
-refuses("reverse walking",
+refuses("reverse walking as a negative speed: a speed is a magnitude",
         lambda: P.compile_plan([{"op": "walk", "vx": -0.3, "duration_s": 5.0}],
-                               TRAINED, lim), "outside")
+                               TRAINED, lim), "speed > 0")
+refuses("reverse walking as a direction: outside the trained range",
+        lambda: P.compile_plan([{"op": "walk", "direction": "backward", "vx": 0.3,
+                                 "duration_s": 5.0}], TRAINED, lim), "outside")
 refuses("wz above the trained range",
         lambda: P.compile_plan(P.parse_script("turn left 90@0.9"), TRAINED, lim),
         "outside")
@@ -392,6 +395,76 @@ for spec in ("turn left 90", "turn right 180"):
           and abs(abs(es.report()["executed"][0]["achieved_deg"]) - float(spec.split()[-1])) < 3.0
           and ts < lim_s.turn_timeout_factor * ps[0].expected_s,
           (es.state, es.report()["executed"][0].get("achieved_deg"), ts))
+
+print("\n== v2: backward and sideways walks (direction picks the axis and sign) ==")
+V2 = P.Envelope([-0.6, 1.0], [-0.5, 0.5], [-1.57, 1.57], source="v2")
+lim2 = P.Limits(v_cal_assumed=True)
+st = P.parse_script("walk backward 2m@0.3; walk left 3s@0.2; walk right 1m; walk back 4s; "
+                    "walk forward 3s; walk 3s")
+check("script: directions parsed, 'back' is backward, none is forward",
+      [x["direction"] for x in st] == ["backward", "left", "right", "backward", "forward",
+                                       "forward"], [x.get("direction") for x in st])
+prims, tot_s, tot_m = P.compile_plan(st, V2, lim2)
+check("backward 2 m @0.3: vx -0.3, 6.67 s", abs(prims[0].vx + 0.3) < 1e-9
+      and prims[0].vy == 0.0 and abs(prims[0].duration_s - 2.0 / 0.3) < 1e-6,
+      prims[0].summary())
+check("left @0.2: vy +0.2, vx 0", prims[1].vy == 0.2 and prims[1].vx == 0.0)
+check("right with no speed: vy = -cruise_vy", abs(prims[2].vy + lim2.cruise_vy) < 1e-9,
+      prims[2].vy)
+check("'walk back 4s' with no speed: vx = -cruise_back_vx",
+      abs(prims[3].vx + lim2.cruise_back_vx) < 1e-9, prims[3].vx)
+check("distance budget counts backward and sideways meters",
+      abs(tot_m - (2.0 + 0.6 + 1.0 + 1.2 + 1.2 + 1.2)) < 1e-6, tot_m)
+check("summary names the direction", "walk backward vx=-0.30" in prims[0].summary()
+      and "walk left vy=+0.20" in prims[1].summary(), prims[0].summary())
+check("a v1 plan compiles exactly as before (forward, vy 0)",
+      prims[5].direction == "forward" and prims[5].vy == 0.0
+      and prims[5].vx == lim2.cruise_vx)
+refuses("v1 envelope: backward is outside the trained range",
+        lambda: P.compile_plan(P.parse_script("walk backward 3s@0.3"), TRAINED, lim2),
+        "outside the trained range")
+refuses("v1 envelope: sideways is refused, the axis was pinned",
+        lambda: P.compile_plan(P.parse_script("walk left 3s@0.2"), TRAINED, lim2),
+        "pinned to 0")
+refuses("v2: backward faster than trained",
+        lambda: P.compile_plan(P.parse_script("walk backward 3s@0.8"), V2, lim2),
+        "outside the trained range")
+refuses("v2: a negative speed is not a direction",
+        lambda: P.plan_from_json({"plan": [{"op": "walk", "vx": -0.3, "duration_s": 3}]},
+                                 V2, lim2), "speed > 0")
+refuses("v2: an unknown direction",
+        lambda: P.compile_plan([{"op": "walk", "direction": "up", "duration_s": 3}], V2,
+                               lim2), "walk direction")
+refuses("a measured v_cal is forward-only: a backward DISTANCE is refused",
+        lambda: P.compile_plan(P.parse_script("walk backward 1m@0.3"), V2,
+                               P.Limits(v_cal=0.35)), "forward speed")
+check("... a backward DURATION with a measured v_cal is fine",
+      len(P.compile_plan(P.parse_script("walk backward 3s@0.3"), V2,
+                         P.Limits(v_cal=0.35))[0]) == 1)
+lim_all = P.Limits(v_cal_assumed=True)
+lim_all.perception_guard = "all"
+refuses("perception_guard all: the forward camera cannot guard a backward walk",
+        lambda: P.compile_plan(P.parse_script("walk backward 3s"), V2, lim_all),
+        "camera looks forward")
+check("json plan: direction backward accepted",
+      P.plan_from_json({"plan": [{"op": "walk", "direction": "backward", "vx": 0.2,
+                                  "duration_s": 3}]}, V2, lim2)[0][0].vx == -0.2)
+check("CLI walk --direction left builds a left walk",
+      N.build_steps(type("A", (), {"cmd": "walk", "speed": 0.2, "direction": "left",
+                                   "meters": None, "seconds": 3.0})())[0]["direction"]
+      == "left")
+check("config reads cruise_back_vx / cruise_vy",
+      N.limits_from_cfg({"cruise_back_vx": "0.25", "cruise_vy": "0.15"}).cruise("right")
+      == 0.15)
+d2 = V2.describe("en")
+check("capability (v2) states backward and sideways limits",
+      "backward at up to 0.60" in d2 and "left at up to 0.50" in d2, d2)
+check("capability (v1) unchanged: cannot walk backward, cannot move sideways",
+      "(I cannot walk backward)" in TRAINED.describe("en")
+      and "I cannot move sideways" in TRAINED.describe("en"))
+check("walk_dirs: v1 forward only, v2 all four",
+      TRAINED.walk_dirs() == ["forward"]
+      and V2.walk_dirs() == ["forward", "backward", "left", "right"])
 
 print("\n" + "-" * 50)
 print("pass {}  fail {}".format(len(PASS), len(FAIL)))

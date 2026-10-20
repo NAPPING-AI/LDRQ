@@ -20,6 +20,8 @@ import time
 
 from . import executor as ex
 from . import nl as NL
+from . import objects as O
+from . import percept as PC
 from . import plan as P
 from . import yaw as Y
 
@@ -27,6 +29,11 @@ BRIDGE_NS = "/r1_hw_bridge"
 CMD_TOPIC = BRIDGE_NS + "/cmd_vel"
 IMU_TOPIC = BRIDGE_NS + "/imu"
 STATUS_TOPIC = BRIDGE_NS + "/status"
+PERCEPTION_NS = "/r1_perception"
+DETECTIONS_TOPIC = PERCEPTION_NS + "/detections"
+SNAP_REQ_TOPIC = PERCEPTION_NS + "/snapshot_request"
+SNAP_DONE_TOPIC = PERCEPTION_NS + "/snapshot_done"
+FRAME_HZ = 12.5          # the perception node's rate; the dry run's camera runs at it too
 
 HERE = pathlib.Path(__file__).resolve().parent
 DEFAULT_CFG = HERE.parent / "config" / "mission.yaml"
@@ -79,7 +86,8 @@ ASSUMED = ("commanded", "assumed")
 
 def limits_from_cfg(cfg):
     lim = P.Limits()
-    for key in ("cruise_vx", "cruise_wz", "v_cal_rel_err", "ramp_s",
+    for key in ("cruise_vx", "cruise_back_vx", "cruise_vy", "cruise_wz", "v_cal_rel_err",
+                "ramp_s",
                 "min_primitive_s", "max_total_s", "max_total_m",
                 "yaw_tol_deg", "turn_timeout_factor", "settle_s", "turn_min_wz"):
         if key in cfg:
@@ -97,28 +105,223 @@ def limits_from_cfg(cfg):
     raw = str(cfg.get("v_cal", "")).strip().lower()
     lim.v_cal_assumed = raw in ASSUMED
     lim.v_cal = None if (raw in UNMEASURED or lim.v_cal_assumed) else float(raw)
+    for key, default in P.OBJ_DEFAULTS.items():
+        if key not in cfg:
+            continue
+        v = cfg[key]
+        if isinstance(default, bool):
+            v = str(v).strip().lower() in ("1", "on", "true", "yes")
+        elif isinstance(default, str):
+            v = str(v).strip().lower()
+        elif isinstance(default, int):
+            v = int(v)
+        else:
+            v = float(v)
+        setattr(lim, key, v)
+    if lim.perception_guard not in ("off", "object", "all"):
+        raise P.PlanError("mission.yaml: perception_guard must be off, object or all, not "
+                          "{!r}".format(lim.perception_guard))
     return lim
 
 
+# ------------------------------------------------------------------ grounding
+def has_object(prims):
+    return any(p.op in P.OBJECT_OPS for p in prims)
+
+
+def needs_camera(prims, lim):
+    return has_object(prims) or (lim.perception_guard == "all"
+                                 and any(p.op == "walk" for p in prims))
+
+
+GROUND_WHY = {
+    PC.STALE: "I have no camera frames to check '{text}' against ({detail}). Is "
+              "r1_perception running?",
+    PC.NOT_SEEN: "I do not see {art} {cls} ('{text}') from here: {detail}.",
+    PC.AMBIGUOUS: "I see more than one {cls} ({detail}) and cannot tell which one you mean.",
+    PC.LOW_CONF: "I am not sure that is {art} {cls}: {detail}.",
+    PC.NO_DEPTH: "I see the {cls} but have no depth reading on it, so I cannot measure how "
+                 "far to walk.",
+}
+
+
+def ground_plan(prims, lim, frames):
+    """Before [y/N], standing still: the plan's object step must point at exactly one
+    detection, confirmed and confident (percept.choose_target), and for walk_to near
+    enough and far enough. Fills prim.ground. Returns (refusal or None, lines)."""
+    obj = [p for p in prims if p.op in P.OBJECT_OPS]
+    if not obj:
+        return None, []
+    p = obj[0]
+    st, det, detail = PC.choose_target(frames, p.target_cls, lim, need_depth=p.op == "walk_to")
+    if st != PC.CONFIRMED:
+        art = "an" if p.target_cls[0] in "aeiou" else "a"
+        return GROUND_WHY[st].format(cls=p.target_cls, text=p.target_text, detail=detail,
+                                     art=art), []
+    rng = det.get("range_m")
+    if p.op == "walk_to":
+        if rng > lim.obj_max_range_m:
+            return ("the {} is {:.1f} m away; I trust my depth camera only to {:.1f} m. Walk "
+                    "closer first.".format(p.target_cls, rng, lim.obj_max_range_m)), []
+        if rng - p.stop_at_m <= lim.obj_arrive_tol_m:
+            return ("I am already {:.2f} m from the {} (you asked {:.2f} m), nothing to walk."
+                    .format(rng, p.target_cls, p.stop_at_m)), []
+    p.ground = det
+    side = ("{:.1f} deg to my {}".format(abs(det["bearing_deg"]),
+                                         "left" if det["bearing_deg"] >= 0 else "right"))
+    lines = ["target:     {} ('{}'), confidence {:.2f}, {} frames in a row, {}{}".format(
+        p.target_cls, p.target_text, det.get("conf", 0.0), det.get("hits", 0), side,
+        ", {:.2f} m away by depth".format(rng) if rng is not None else "")]
+    if p.op == "walk_to":
+        lines.append("            I will walk about {:.2f} m and stop {:.2f} m from it.".format(
+            max(0.0, rng - p.stop_at_m), p.stop_at_m))
+    return None, lines
+
+
+def load_world(path):
+    w = json.loads(pathlib.Path(path).read_text())
+    return PC.FakeWorld(w["objects"], **{k: v for k, v in w.items() if k != "objects"})
+
+
+def world_frames(world, n=None):
+    """What the dry run's camera sees before the plan starts, standing still."""
+    n = n or 2 * 3 + 1
+    return [world.frame(-(n - i) / FRAME_HZ) for i in range(n)]
+
+
+def collect_live(lim, cfg, seconds=None):
+    """Frames from the running perception node, standing still, then the operator's
+    picture with the target highlighted. Returns (frames, picture path or None, note)."""
+    import rclpy
+    from rclpy.qos import QoSProfile, ReliabilityPolicy
+    from std_msgs.msg import String
+    ctx = rclpy.Context()
+    rclpy.init(context=ctx)
+    node = rclpy.create_node("r1_mission_ground", context=ctx)
+    frames, done = [], {}
+    qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
+    node.create_subscription(String, DETECTIONS_TOPIC,
+                             lambda m: frames.append(PC.from_message(json.loads(m.data))), qos)
+    node.create_subscription(String, SNAP_DONE_TOPIC,
+                             lambda m: done.update(json.loads(m.data)), qos)
+    req = node.create_publisher(String, SNAP_REQ_TOPIC, qos)
+    from rclpy.executors import SingleThreadedExecutor
+    exe = SingleThreadedExecutor(context=ctx)
+    exe.add_node(node)
+    wait = seconds or max(1.0, (lim.obj_confirm_frames + 2) / FRAME_HZ * 2)
+    t_end = time.time() + wait
+    while time.time() < t_end:
+        exe.spin_once(timeout_sec=0.05)
+    return frames, (node, exe, req, done, ctx)
+
+
+def snapshot(handle, highlight, lim, cfg):
+    node, exe, req, done, ctx = handle
+    from std_msgs.msg import String
+    path = None
+    try:
+        folder = os.path.expanduser(str(cfg.get("obj_snapshot_dir", "~/r1_snapshots")))
+        path = os.path.join(folder, "ask_{}.jpg".format(time.strftime("%Y%m%d_%H%M%S")))
+        m = String()
+        m.data = json.dumps({"path": path, "highlight": highlight,
+                             "target_conf": lim.obj_target_conf})
+        req.publish(m)
+        t_end = time.time() + 3.0
+        while time.time() < t_end and done.get("path") != path:
+            exe.spin_once(timeout_sec=0.05)
+        if done.get("path") != path:
+            return None, "no picture: the perception node did not answer in 3 s"
+        if not done.get("ok"):
+            return None, "no picture: " + str(done.get("error"))
+        return path, None
+    finally:
+        node.destroy_node()
+        rclpy_shutdown(ctx)
+
+
+def rclpy_shutdown(ctx):
+    import rclpy
+    try:
+        rclpy.shutdown(context=ctx)
+    except Exception:  # noqa: BLE001 -- already down
+        pass
+
+
+def ground_or_refuse(prims, lim, cfg, args):
+    """The step between the printed plan and [y/N] for a plan with an object step.
+    Returns (exit code or None to go on, world for the dry run, reply text)."""
+    world = load_world(args.world) if getattr(args, "world", None) else None
+    if not needs_camera(prims, lim):
+        return None, world, None
+    if args.dry_run and world is None:
+        msg = ("this plan needs the camera; a dry run needs --world FILE (a simulated room, "
+               "see mission_ctl/README.md)")
+        print("\nREFUSED: " + msg)
+        return 2, None, msg
+    if not has_object(prims):
+        return None, world, None
+    if world is not None:
+        frames, handle = world_frames(world), None
+    else:
+        try:
+            frames, handle = collect_live(lim, cfg)
+        except Exception as exc:  # noqa: BLE001 -- no ROS here, or no node
+            msg = "could not read the camera: {}".format(exc)
+            print("\nREFUSED: " + msg)
+            return 2, None, msg
+    why, lines = ground_plan(prims, lim, frames)
+    if why:
+        if handle:
+            rclpy_shutdown(handle[4])
+        print("\nREFUSED: " + why)
+        return 2, world, why
+    print()
+    for ln in lines:
+        print(ln)
+    if handle:
+        tgt = next(p for p in prims if p.op in P.OBJECT_OPS).ground
+        path, err = snapshot(handle, tgt.get("id"), lim, cfg)
+        if path:
+            port = int(cfg.get("obj_snapshot_http_port", 0) or 0)
+            print("picture:    {}  <- LOOK AT IT before you answer (the red box is the "
+                  "target)".format(path))
+            print("            scp unitree@<robot>:{} .{}".format(
+                path, "   or  http://<robot>:{}/".format(port) if port else ""))
+        else:
+            print("picture:    " + err)
+            print("            (no picture: confirm only if you are sure which {} it is)"
+                  .format(tgt.get("cls")))
+    return None, world, None
+
+
 # --------------------------------------------------------------------- dry run
-def dry_run(prims, limits, hz, result=None):
+def dry_run(prims, limits, hz, result=None, world=None):
     """Execute against a simulated robot that tracks wz perfectly. Prints the
     command trace. No ROS, so this is what you run before you go near the robot.
+    `world` (percept.FakeWorld) is the simulated camera for turn_to / walk_to.
     `result`, if given, receives the report under "report"."""
     e = ex.Executor(prims, limits)
     dt, t, acc = 1.0 / hz, 0.0, 0.0
-    print("\n{:>8}  {:>6} {:>6}  {:<10} {}".format("t", "vx", "wz", "state", "event"))
+    pc, next_f = (PC.Percept(), 0.0) if world is not None else (None, None)
+    print("\n{:>8}  {:>6} {:>6} {:>6}  {:<10} {}".format("t", "vx", "vy", "wz", "state",
+                                                          "event"))
     last = None
     while t < limits.max_total_s * 2 + 30:
-        out = e.step(t, yaw=acc, bridge_state="RUNNING")
-        line = (out.vx, out.wz, out.state)
+        if world is not None:
+            while next_f <= t:
+                pc.add(world.frame(next_f))
+                next_f += 1.0 / FRAME_HZ
+        out = e.step(t, yaw=acc, bridge_state="RUNNING", percept=pc)
+        line = (out.vx, out.vy, out.wz, out.state)
         if out.event or line != last:
-            print("{:8.2f}  {:6.3f} {:6.3f}  {:<10} {}".format(
-                t, out.vx, out.wz, out.state, out.event or ""))
+            print("{:8.2f}  {:6.3f} {:6.3f} {:6.3f}  {:<10} {}".format(
+                t, out.vx, out.vy, out.wz, out.state, out.event or ""))
             last = line
         if out.state in (ex.DONE, ex.ABORTED):
             break
         acc += out.wz * dt
+        if world is not None:
+            world.move(out.vx, out.wz, dt, vy=out.vy)
         t += dt
     rep = e.report()
     if result is not None:
@@ -133,6 +336,7 @@ def live_run(prims, limits, hz, allow_second_writer=False, result=None):
     from rclpy.node import Node
     from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
     from std_msgs.msg import Float32MultiArray, String
+    camera = needs_camera(prims, limits)
 
     class Mission(Node):
         def __init__(self):
@@ -156,9 +360,24 @@ def live_run(prims, limits, hz, allow_second_writer=False, result=None):
             self.bridge_state = "UNKNOWN"
             self.last_status = None
             self.ex = ex.Executor(prims, limits)
-            self.t0 = None
+            # The executor's clock starts here. Camera frames carry time.time() of the
+            # capture; wall0 maps them onto this clock (same machine, same clock).
+            self.t0 = time.monotonic()
+            self.wall0 = time.time()
+            self.percept = None
+            if camera:
+                self.percept = PC.Percept()
+                self.create_subscription(
+                    String, DETECTIONS_TOPIC, self.on_detections,
+                    QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE))
             self.msg = Float32MultiArray()
             self.create_timer(1.0 / hz, self.tick)
+
+        def on_detections(self, m):
+            try:
+                self.percept.add(PC.from_message(json.loads(m.data), offset=self.wall0))
+            except (ValueError, KeyError):
+                pass
 
         def on_imu(self, m):
             if len(m.data) >= 4:
@@ -177,8 +396,6 @@ def live_run(prims, limits, hz, allow_second_writer=False, result=None):
 
         def tick(self):
             now = time.monotonic()
-            if self.t0 is None:
-                self.t0 = now
             t = now - self.t0
             yawv = self.tracker.total if self.tracker.ready else None
             state = self.bridge_state
@@ -186,7 +403,7 @@ def live_run(prims, limits, hz, allow_second_writer=False, result=None):
             # this process has lost it. Either way, stop trusting the last value.
             if self.last_status is not None and now - self.last_status > 3.0:
                 state = "NO_STATUS"
-            out = self.ex.step(t, yaw=yawv, bridge_state=state)
+            out = self.ex.step(t, yaw=yawv, bridge_state=state, percept=self.percept)
             self.send(out.vx, out.vy, out.wz)
             if out.event:
                 self.get_logger().info(out.event)
@@ -227,8 +444,7 @@ def live_run(prims, limits, hz, allow_second_writer=False, result=None):
         rclpy.spin_once(node, timeout_sec=0.05)
     if stop["flag"] and node.ex.state not in (ex.DONE, ex.ABORTED):
         # On the executor's clock, so the interrupted step records how long it ran.
-        node.ex.interrupt("operator interrupt (Ctrl-C)",
-                          time.monotonic() - node.t0 if node.t0 is not None else None)
+        node.ex.interrupt("operator interrupt (Ctrl-C)", time.monotonic() - node.t0)
         node.get_logger().warn("interrupted -- commanding zero")
     # Zero, several times, and give the executor a chance to flush them. The
     # bridge's deadman is the backstop if this process is killed harder than this.
@@ -265,9 +481,14 @@ SCHEMA = {
                 "required": ["op"],
                 "properties": {
                     "op": {"enum": list(P.OPS)},
-                    "vx": {"type": "number", "description": "forward speed, m/s"},
+                    "vx": {"type": "number",
+                           "description": "walk speed, a magnitude, m/s (direction gives "
+                                          "the axis and sign)"},
                     "wz": {"type": "number", "description": "turn rate magnitude, rad/s"},
-                    "direction": {"enum": ["left", "right"]},
+                    "direction": {"enum": list(P.WALK_DIRS),
+                                  "description": "walk: forward (default), backward, left "
+                                                 "or right, as the envelope allows; "
+                                                 "turn: left or right"},
                     "duration_s": {"type": "number"},
                     "distance_m": {"type": "number",
                                    "description": "OPEN LOOP: converted to time "
@@ -275,6 +496,12 @@ SCHEMA = {
                                                   "reported with an error bar"},
                     "yaw_deg": {"type": "number",
                                 "description": "CLOSED LOOP on the IMU heading"},
+                    "object": {"type": "string",
+                               "description": "turn_to / walk_to: the words naming it"},
+                    "object_class": {"type": "string",
+                                     "description": "or the COCO class directly"},
+                    "stop_at_m": {"type": "number",
+                                  "description": "walk_to: stop this far from it, by depth"},
                 },
                 "additionalProperties": False,
             },
@@ -309,6 +536,14 @@ def capability_text(env, lim):
     lines.append("I can turn to a given angle using my IMU heading, to within about "
                  "{:.0f} degrees as my IMU reads it (not checked against the floor)."
                  .format(lim.yaw_tol_deg))
+    if lim.perception:
+        lines.append(
+            "I can turn to face, or walk up to, one thing I can see, if it is the only one "
+            "of its kind in view: {}. I measure the distance to it with my depth camera "
+            "and stop {:.1f} m from it unless you say otherwise; I walk there in pieces of "
+            "at most {:.1f} m and look again after each. You confirm the target on a "
+            "picture first. It must be the first thing in the plan that moves me."
+            .format(", ".join(O.known_kinds()), lim.obj_stop_default_m, lim.obj_segment_m))
     lines.append("Each step must last at least {:.0f} s. A plan may have at most {} steps, "
                  "{:.0f} s in total, and {:.0f} m in total."
                  .format(lim.min_primitive_s, lim.max_prims, lim.max_total_s, lim.max_total_m))
@@ -343,6 +578,10 @@ def print_plan(prims, tot_s, tot_m, env, lim):
     for i, pr in enumerate(prims):
         print("  {}. {}".format(i + 1, pr.summary()))
     print("envelope: {}  [{}]".format(env.describe(), env.source))
+    if has_object(prims):
+        print("NOTE: the object step is checked against the camera before you confirm, and "
+              "every walk in it is guarded by the camera (a person within {:.1f} m, or "
+              "something in the way, stops it).".format(lim.obj_person_stop_m))
     if any(pr.distance_m is not None for pr in prims):
         print("NOTE: every distance here is OPEN LOOP (time x {}). There is no "
               "odometry on this robot.".format(
@@ -440,9 +679,17 @@ def ask(args, env, lim, cfg):
     print_plan(u.prims, u.total_s, u.total_m, env, lim)
     if args.yes:
         print("(--yes is ignored by ask: confirm the parsed plan yourself)")
+    gcode, world, why = ground_or_refuse(u.prims, lim, cfg, args)
+    if gcode is not None:
+        rec.update({"reply": why, "exit": gcode, "grounding": "refused"})
+        _log(args.log, rec)
+        return gcode
+    tgt = next((p.ground for p in u.prims if p.ground), None)
+    if tgt:
+        rec["target"] = tgt
     res = {}
     if args.dry_run:
-        code = dry_run(u.prims, lim, args.pub_hz, result=res)
+        code = dry_run(u.prims, lim, args.pub_hz, result=res, world=world)
     else:
         if not confirm():
             rec.update({"reply": "not executed (operator declined)", "exit": 2})
@@ -514,7 +761,8 @@ def build_steps(args):
                 else sys.stdin.read())
         return json.loads(text)
     if args.cmd == "walk":
-        st = {"op": "walk", "vx": args.speed, "text": "walk (cli)"}
+        st = {"op": "walk", "vx": args.speed, "direction": args.direction,
+              "text": "walk {} (cli)".format(args.direction)}
         if args.meters is not None:
             st["distance_m"] = args.meters
         else:
@@ -550,6 +798,9 @@ def main(argv=None):
                         help="simulate, print the command trace, touch no robot")
     common.add_argument("--yes", action="store_true", help="skip the confirmation")
     common.add_argument("--allow-second-writer", action="store_true")
+    common.add_argument("--world", default=None,
+                        help="dry run: a simulated room (JSON) for turn_to / walk_to; "
+                             "see mission_ctl/README.md")
 
     ap = argparse.ArgumentParser(
         prog="r1_mission", parents=[common],
@@ -561,7 +812,9 @@ def main(argv=None):
                        help="walk for a time, or an (open-loop) distance")
     w.add_argument("--seconds", type=float, default=5.0)
     w.add_argument("--meters", type=float, default=None)
-    w.add_argument("--speed", type=float, default=None)
+    w.add_argument("--speed", type=float, default=None, help="m/s, a magnitude")
+    w.add_argument("--direction", default="forward", choices=list(P.WALK_DIRS),
+                   help="backward / left / right only where the installed envelope has them")
 
     t = sub.add_parser("turn", parents=[common],
                        help="turn by an angle (closed loop) or a time")
@@ -624,7 +877,7 @@ def main(argv=None):
         lim = limits_from_cfg(cfg)
         env = resolve_envelope(args.envelope)
         if getattr(args, "speed", None) is None and args.cmd == "walk":
-            args.speed = lim.cruise_vx
+            args.speed = lim.cruise(args.direction)
         if getattr(args, "rate", None) is None and args.cmd == "turn":
             args.rate = lim.cruise_wz
 
@@ -649,9 +902,16 @@ def main(argv=None):
         return 2
 
     print_plan(prims, tot_s, tot_m, env, lim)
+    try:
+        gcode, world, _ = ground_or_refuse(prims, lim, cfg, args)
+    except (OSError, ValueError, KeyError) as exc:
+        print("\nREFUSED: --world: {}".format(exc), file=sys.stderr)
+        return 2
+    if gcode is not None:
+        return gcode
 
     if args.dry_run:
-        return dry_run(prims, lim, args.pub_hz)
+        return dry_run(prims, lim, args.pub_hz, world=world)
 
     if not confirm(args.yes):
         return 2

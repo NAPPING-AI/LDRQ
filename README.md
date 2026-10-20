@@ -28,6 +28,8 @@ through a small language model running on the robot.
 | closed-loop turns on the robot | 10/10 within **1.6°** by the IMU |
 | English sentence → checked plan, held-out test sets | **77/80** on the Orin, 0.65 s median; 11/11 instructions right end to end |
 | swapping the policy | **one command**, 8 checked steps; 3/3 bad bundles refused before any change |
+| v2 policy: zero command, simulation | creep **0.45 → 0.14 m per 10 s** (v1 → v2); backward to 0.6 m/s, sideways ±0.5 m/s, turns to 1.4 rad/s, no falls |
+| v2 on the robot | walks **backward and sideways** and holds its place on a zero command; installed by the same one command |
 
 The full account is [docs/technical_report.md](docs/technical_report.md); how the work was
 organized and what each step found is [docs/project_history.md](docs/project_history.md).
@@ -52,7 +54,7 @@ machine with Python 3.8+, with no GPU, no ROS and no robot.
 | **understand the project** | read [docs/technical_report.md](docs/technical_report.md) (the whole project in one document), then [docs/system_architecture.md](docs/system_architecture.md) (how a sentence becomes motor commands) | 30 min |
 | **run something now** | the commands below | 2 min |
 | **train or evaluate in simulation** | an NVIDIA GPU with Isaac Lab 2.1 / Isaac Sim 4.5 → [*Reproducing*](#reproducing) and [*Reproducing a training run*](#reproducing-a-training-run) | 1 h to set up, 1.5 h per training run |
-| **run it on an R1** | an R1 EDU (onboard Orin NX) → download the robot release ([Releases](https://github.com/kedianwen/LDRQ/releases): `release_v1.1.0.tar.gz` + the model archive) and follow its README ([release/README.md](release/README.md), 中文 [release/README_zh.md](release/README_zh.md)); read [*Running on the robot*](#running-on-the-robot) first | an hour |
+| **run it on an R1** | an R1 EDU (onboard Orin NX) → download the robot release ([Releases](https://github.com/kedianwen/LDRQ/releases): `release_v2.0.0.tar.gz` + the model archive) and follow its README ([release/README.md](release/README.md), 中文 [release/README_zh.md](release/README_zh.md)); read [*Running on the robot*](#running-on-the-robot) first | an hour |
 
 ```bash
 git clone https://github.com/kedianwen/LDRQ.git && cd LDRQ
@@ -68,6 +70,10 @@ python3 mission_ctl/r1_mission_cli.py capability
 
 # a plan, compiled, checked and simulated against a stand-in robot; nothing moves
 python3 mission_ctl/r1_mission_cli.py run "walk 3s@0.3; turn left 90" --dry-run
+
+# the same with the v2 policy's command range: backward and sideways exist
+printf '{"vx": [-0.6, 1.0], "vy": [-0.5, 0.5], "wz": [-1.57, 1.57]}' > /tmp/v2_env.json
+python3 mission_ctl/r1_mission_cli.py run "walk backward 1m; walk left 2s" --dry-run --envelope /tmp/v2_env.json
 ```
 
 To try the English front end as well, run [Ollama](https://ollama.com) with
@@ -82,15 +88,16 @@ the simulation, TensorRT and robot dependencies come from.
 | folder | what it is | built in | start with |
 |---|---|---|---|
 | `assets/` | the R1 robot definition: URDF, meshes, Isaac Lab `ArticulationCfg`; the USD is generated, not tracked | W01–W04 | [assets/r1/README.md](assets/r1/README.md) |
-| `tasks/` | the flat-ground velocity-tracking task `Isaac-Velocity-Flat-R1-v0`: scene, observations, rewards, randomization, PPO config | W02–W04 | [tasks/r1_flat/README.md](tasks/r1_flat/README.md) |
+| `tasks/` | the flat-ground velocity-tracking task `Isaac-Velocity-Flat-R1-v0`: scene, observations, rewards, randomization, PPO config; `-v2`, its retrain for backward, sideways and no creep | W02–W04, v2 | [tasks/r1_flat/README.md](tasks/r1_flat/README.md) |
 | `scripts/` | Isaac Lab tools: URDF→USD, inspection, train/play/evaluate, gait diagnosis, config-drift check, the simulated `kp_scale` sweep, figures, demo video | W01 → stage A | [scripts/README.md](scripts/README.md) |
 | `experiments/` | one record per training run (config + final metrics), for comparing runs | W03–W04 | [experiments/runs.md](experiments/runs.md) |
-| `models/` | **the deployed policy** (checkpoint, TorchScript, ONNX, parity fixture), so a fresh clone needs no retraining | W04, tracked in stage A | [models/week04_nohead/README.md](models/week04_nohead/README.md) |
+| `models/` | **the two policies** (checkpoint, TorchScript, ONNX, parity fixture): v2, deployed since 2026-10-20, and v1 | W04, v2 | [models/v2_drift_ft/README.md](models/v2_drift_ft/README.md), [models/week04_nohead/README.md](models/week04_nohead/README.md) |
 | `deploy/` | the on-robot runtime: TensorRT engine builder and parity check, the C++/ROS 2 policy node and hardware bridge, measurement probes | W05–W08 | [deploy/README.md](deploy/README.md) |
 | `policy_pack/` | swap the deployed policy with one command: bundle on the dev box, eight checked install steps on the robot | stage D | [policy_pack/README.md](policy_pack/README.md) |
 | `mission_ctl/` | the command layer: time / angle / speed plans over the bridge's topics, IMU-closed turns, `ask` for English, and its offline eval | stages B–C | [mission_ctl/README.md](mission_ctl/README.md) |
 | `llm/` | the model server on the robot: Ollama for JetPack 5, health checks, the control-loop coexistence test | stage C | [llm/README.md](llm/README.md) |
-| `release/` | the robot-side release: install and usage READMEs (English, 中文), the robot self-test, and `make_release.sh`, which builds the release assets from the committed tree | v1.1.0 | [release/README.md](release/README.md) |
+| `perception/` | object detection (YOLOX-Nano, TensorRT) for `turn_to` / `walk_to`: the node, calibration and evaluation tools; robot pending | stage E | [perception/README.md](perception/README.md) |
+| `release/` | the robot-side release: install and usage READMEs (English, 中文), the robot self-test, and `make_release.sh`, which builds the release assets from the committed tree | v1.1.0, v2.0.0 | [release/README.md](release/README.md) |
 | `docs/` | results: the technical report, per-stage write-ups, figures, robot evidence | all | [docs/README.md](docs/README.md) |
 
 The W07 snapshot of the robot's deploy tree (Orin-built binaries and engines, extracted
@@ -149,6 +156,8 @@ output (each script prints `[ok]` lines or writes its report), not the exit code
 | simulation clip for the demo | GPU | `~/IsaacLab/isaaclab.sh -p scripts/record_demo_sim.py --headless --out outputs/demo/sim_sequence.mp4` |
 | demo video | none (ffmpeg) | `python3 scripts/make_demo_video.py --out ... --clip ... --figure docs/stageA_kp_sweep_wide.png` (see its docstring) |
 | retrain the policy | GPU (~1.5 h) | see *Reproducing a training run* below |
+| retrain v2 (two stages) | GPU (~2.5 h) | [docs/v2_policy.md](docs/v2_policy.md#reproducing) |
+| v2 command grid: zero-command drift, backward, sideways, turns | GPU | `~/IsaacLab/isaaclab.sh -p scripts/eval_command_grid.py --headless --num_envs 64 --task Isaac-Velocity-Flat-R1-Play-v2 --checkpoint models/v2_drift_ft/model_4799.pt` |
 | engine + parity on the robot | robot | `deploy/README.md` *Quick start* |
 | real half of the `kp_scale` sweep | robot | `python3 deploy/tools/probe_cpp/gain_sweep_real.py --plan`, then `--record <KP>` per point, then `--collect` |
 
@@ -238,7 +247,7 @@ both toolchains working from one tree; see `deploy/README.md`.
 ## Project history
 
 The work ran as a 12-week plan (weeks **W01–W08**, then four **stages A–D** in place of
-W09–W12) in three milestones, with pass/fail gates such as **PG-2** and requirements such
+W09–W12) in three milestones, followed by stage E (vision, open) and the v2 policy, with pass/fail gates such as **PG-2** and requirements such
 as **FR-Q3**. Those labels appear in commits and documents; all of them, the timeline, the
 status of each stage and the finding from each week that no metric showed are in
 [docs/project_history.md](docs/project_history.md). The definition-of-done checklist with

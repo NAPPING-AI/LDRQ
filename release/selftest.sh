@@ -22,13 +22,14 @@ fi
 [[ -x llm/ollama/bin/ollama ]] && ok "ollama runtime present" || bad "llm/ollama/bin/ollama missing or not executable (copied as zip?)"
 
 echo "-- code (Python $(python3 -c 'import platform;print(platform.python_version())'))"
-B="$(ls -d bundles/*/ | head -1)"
 run "mission_ctl core tests"        python3 mission_ctl/tests/test_core.py
 run "mission_ctl English tests"     python3 mission_ctl/tests/test_nl.py
 run "eval sets vs shipped config"   python3 mission_ctl/eval/run_nl_eval.py --check --set all
 run "coexist selftest"              python3 llm/coexist.py --selftest
-run "policy bundle valid"           python3 policy_pack/verify_bundle.py "$B"
-run "bad bundles refused"           bash policy_pack/tests/run_tests.sh "$B"
+for B in bundles/*/; do
+  run "policy bundle valid: $(basename "$B")"  python3 policy_pack/verify_bundle.py "$B"
+  run "bad bundles refused: $(basename "$B")"  bash policy_pack/tests/run_tests.sh "$B"
+done
 
 echo "-- robot system (needed for install_bundle.sh and the stack)"
 grep -q "R35" /etc/nv_tegra_release 2>/dev/null && ok "JetPack 5 ($(head -1 /etc/nv_tegra_release | cut -c1-40))" \

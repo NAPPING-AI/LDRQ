@@ -25,7 +25,8 @@ The numbers come from [stageC_nl_eval.md](stageC_nl_eval.md) and
 
 | layer | runs | rate or latency on the robot | code |
 |---|---|---|---|
-| model: qwen3:1.7b via Ollama 0.34.4 | once per instruction, before anything moves | 0.6–2.6 s per instruction at 33.5 tok/s on the GPU | `llm/`, llama.cpp (CUDA 11.4) |
+| model: qwen3:1.7b via Ollama 0.34.4 | once per instruction, before anything moves | about 1–2 s per instruction at 21 tok/s on 4 CPU threads (since stage E; 0.6–2.6 s on the GPU in stage C) | `llm/`, llama.cpp |
+| object detector: YOLOX-Nano (stage E) | always, while running | ~12.5 Hz, right after a policy step | `perception/` (Python 3.8, TensorRT) |
 | NL front end + plan compiler | once per instruction | milliseconds | `mission_ctl/r1_mission/nl.py`, `plan.py` (Python 3.8) |
 | executor | while a plan runs | `~/cmd_vel` at 10 Hz | `executor.py`, `node.py` (rclpy) |
 | policy | always | 50 Hz; 0.46 ms idle, up to ~5 ms while the model decodes | `deploy/.../r1_policy_runner` (C++, TensorRT FP32) |
@@ -117,7 +118,11 @@ is the bridge's state machine, which runs whether or not a plan does. Source:
 
 ## The shared GPU (decision 2026-09-30)
 
-The Orin NX has one GPU. The policy's TensorRT engine and the model share it.
+The Orin NX has one GPU. In stage C the policy's TensorRT engine and the model shared it;
+**since stage E the model runs on 4 CPU threads** (`mission.yaml`), and the GPU is shared by
+the policy and the object detector instead. The detector is scheduled right after each
+fourth policy step, so the two do not overlap
+([stageE_perception.md](stageE_perception.md)). The stage C record:
 
 - **While the model decodes, the policy waits for the GPU.** Its inference goes from
   0.46 ms to 3.5 ms at p50. It has a steady ceiling of about 5.0 ms, which looks like the

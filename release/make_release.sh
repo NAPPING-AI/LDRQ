@@ -1,21 +1,21 @@
 #!/usr/bin/env bash
 # Build the robot-side release from the COMMITTED tree (dev box).
 #
-#   bash release/make_release.sh --runtime <dir> [--version 1.1.0] [--out <dir>]
+#   bash release/make_release.sh --runtime <dir> [--version 2.0.0] [--out <dir>]
 #
 # <dir> holds llm/ollama/ (Ollama v0.34.4 arm64 + jetpack5, unpacked) and
 # llm/models/ (an Ollama model store containing qwen3:1.7b) -- i.e. what
 # llm/make_runtime.sh builds, extracted.
 #
 # Writes to <out> (default ./dist):
-#   release_v<V>.tar.gz                 code + policy bundle + Ollama runtime + READMEs
+#   release_v<V>.tar.gz                 code + policy bundles (v2, and v1 for rollback) + Ollama runtime + READMEs
 #   qwen3-1.7b_r1-robot-v<V>.tar.gz     the model, extracting into the same directory
 #   SHA256SUMS
 # Two archives because a GitHub release asset is limited to 2 GiB, and the
 # runtime plus the model is ~2.3 GB.
 set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-V=1.1.0; RUNTIME=""; OUT="$REPO/dist"; MODEL=qwen3; TAGM=1.7b
+V=2.0.0; RUNTIME=""; OUT="$REPO/dist"; MODEL=qwen3; TAGM=1.7b
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --runtime) RUNTIME="$2"; shift 2 ;;
@@ -42,12 +42,17 @@ rm -f "$S/deploy/setup.sh" "$S/deploy/tools/fetch_orin_snapshot.sh" "$S/llm/make
 rm -rf "$S/deploy/docs"
 cp release/README.md release/README_zh.md release/THIRD_PARTY_NOTICES.md "$S/"
 install -m 755 release/selftest.sh "$S/selftest.sh"
-printf 'r1-robot v%s\ngit %s\nbuilt %s\npolicy 2026-08-19_11-03-32_week04_nohead\nmodel %s:%s\n' \
+# The object steps (stage E) need the perception node, which this release does not ship.
+sed -i 's/^perception: on /perception: off/' "$S/mission_ctl/config/mission.yaml"
+grep -q '^perception: off' "$S/mission_ctl/config/mission.yaml" || { echo "could not switch perception off"; exit 1; }
+printf 'r1-robot v%s\ngit %s\nbuilt %s\npolicy 2026-10-16_17-57-14_v2_drift_ft (rollback: 2026-08-19_11-03-32_week04_nohead)\nmodel %s:%s\n' \
   "$V" "$(git rev-parse HEAD)" "$(date -Iseconds)" "$MODEL" "$TAGM" > "$S/VERSION"
 
-echo "== policy bundle"
-python3 policy_pack/make_bundle.py --out "$S/bundles" >/dev/null
-python3 policy_pack/verify_bundle.py "$S"/bundles/*/ | tail -1
+echo "== policy bundles"
+python3 policy_pack/make_bundle.py --out "$S/bundles" >/dev/null           # v1, for rollback
+python3 policy_pack/make_bundle.py --out "$S/bundles" --task-cfg tasks/r1_flat/flat_v2_env_cfg.py \
+    --interface models/v2_drift_ft/interface --artifacts models/v2_drift_ft >/dev/null
+for b in "$S"/bundles/*/; do python3 policy_pack/verify_bundle.py "$b" | tail -1; done
 
 echo "== Ollama runtime"
 cp -a "$RUNTIME/llm/ollama" "$S/llm/ollama"

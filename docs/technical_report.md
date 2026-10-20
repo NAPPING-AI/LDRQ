@@ -1,6 +1,6 @@
 # Walking a Unitree R1 from Isaac Lab to its onboard Orin NX: a sim2real report, and how much actuator-gain error the policy really tolerates
 
-*LDRQ technical report · 2026-09-29, updated 2026-10-02 with the English command layer and one-command policy install · code, data and figures: this repository*
+*LDRQ technical report · 2026-09-29, updated 2026-10-02 with the English command layer and one-command policy install, and 2026-10-20 with the v2 policy · code, data and figures: this repository*
 
 ## Abstract
 
@@ -184,8 +184,9 @@ Results:
   instructions ran end to end exactly as asked.
 - While the model generates on the shared GPU, policy inference rises to about 5 ms of
   the 20 ms step. Every control-loop limit holds, but a 2 ms target set in advance is
-  missed. The model stays on the GPU by decision, and the target becomes the optimization
-  goal.
+  missed. The model stayed on the GPU by decision in stage C; in stage E it moved to four
+  CPU threads (542 µs p99 measured in stage C), to leave the GPU to the policy and the
+  object detector.
 - Each `ask` stands alone: "again" or "the other way" has no referent, and is refused or
   shown for confirmation.
 
@@ -207,6 +208,27 @@ The policy already running was installed as a regression test on the robot:
 - only the expected four files changed;
 - with clocks locked, in-loop inference was unchanged (p50 about 454 µs);
 - three bad bundles were refused at step 1 with the deploy tree byte-for-byte unchanged.
+
+**A second policy through the same path** ([v2_policy.md](v2_policy.md)). On a zero
+command v1 kept stepping and crept forward at +0.046 m/s. The creep was already there in
+simulation and identical in every env, so it was a bias of the policy, not a sim2real
+effect. Three things in training let it survive:
+- zero was the edge of the trained speed range;
+- only 2 % of envs ever saw a zero command;
+- the tracking reward barely noticed a 0.05 m/s error.
+
+v2 is a retrain with a command range that spans zero, 15 % zero-command envs, and a
+penalty on the ~1 s average velocity. That penalty is added only after the gait exists:
+switched on from the start, it taught the robot to stand still and to ignore small
+commands.
+
+v2 walks backward (to 0.6 m/s) and sideways (±0.5 m/s), turns at up to 1.57 rad/s, and
+creeps at +0.014 m/s in simulation. It keeps v1's interface. It installed with the same
+one command; the bridge's command range came from the bundle. On the robot (2026-10-20)
+it walked backward and sideways and held its place on a zero command. The English front
+end needed no new prompt, because the model had always transcribed "back up" and
+"sidestep" and the deterministic layer had refused them. On a new frozen set it scored
+19/20, with no unsafe answer.
 
 ## 5. Silent defects
 
@@ -246,7 +268,9 @@ Each one looked like success or like a plausible physical effect.
 
 ## 7. Limitations and next steps
 
-- One robot, one policy, flat ground, a slack gantry for the sweep, 13 real recordings.
+- One robot, flat ground, a slack gantry for the sweep, 13 real recordings. The
+  robustness sweep was run on v1 only; v2 runs at v1's demo gain (kp 1.3) without a
+  sweep of its own.
 - The postural gap is characterised, not explained. The obvious next measurements are a
   standing test (no walking) across kp to separate static sag from gait effects, the IMU
   upright reference re-checked against a level, and, if the sag is confirmed, widening

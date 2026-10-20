@@ -26,6 +26,8 @@
 | 真机闭环转向 | 10/10 次，按 IMU 读数误差都在 **1.6°** 以内 |
 | 英文句子 → 经检查的计划（留出测试集） | Orin 上 **77/80**，中位耗时 0.65 秒；端到端 11 条指令全部正确 |
 | 换策略 | **一条命令**、8 步检查；3 个坏包全部在改动任何文件之前被拒 |
+| v2 策略：零指令（仿真） | 往前蹭的距离从 **每 10 秒 0.45 m 降到 0.14 m**（v1 → v2）；能后退到 0.6 m/s、横移 ±0.5 m/s、转向到 1.4 rad/s，零摔倒 |
+| v2 真机 | 能**后退、侧行**，零指令时站定原地踏步；用同一条命令安装 |
 
 ## 系统架构
 
@@ -69,7 +71,7 @@ python3 mission_ctl/r1_mission_cli.py capability  # 机器人自述能做什么
 python3 mission_ctl/r1_mission_cli.py run "walk 3s@0.3; turn left 90" --dry-run   # 编译、检查并仿真一个计划
 ```
 
-- 想在真机上运行：下载 [Releases](https://github.com/kedianwen/LDRQ/releases) 里的 `release_v1.1.0.tar.gz` 和模型包，按其中的 [中文说明](release/README_zh.md) 操作。
+- 想在真机上运行：下载 [Releases](https://github.com/kedianwen/LDRQ/releases) 里的 `release_v2.0.0.tar.gz` 和模型包，按其中的 [中文说明](release/README_zh.md) 操作。
 - 想做训练或仿真：见英文 README 的 [*Reproducing*](README.md#reproducing) 一节。
 
 ## 文档
@@ -77,6 +79,7 @@ python3 mission_ctl/r1_mission_cli.py run "walk 3s@0.3; turn left 90" --dry-run 
 | 文档 | 内容 |
 |---|---|
 | [docs/technical_report.md](docs/technical_report.md) | 技术报告：整个项目的完整叙述 |
+| [docs/v2_policy.md](docs/v2_policy.md) | v2 策略：v1 零指令往前蹭的原因、两阶段重训、后退与横移、真机部署 |
 | [docs/system_architecture.md](docs/system_architecture.md) | LLM 与运控的完整数据流、架构图和逻辑图 |
 | [docs/stageA_kp_sweep.md](docs/stageA_kp_sweep.md) | 核心实验：`kp_scale` 稳定域，仿真与真机画在同一张图上 |
 | [docs/project_history.md](docs/project_history.md) | 项目过程：周计划、验收门槛（PG/FR 编号的含义），以及每周的发现 |

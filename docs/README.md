@@ -23,6 +23,8 @@ requirement) are explained in [project_history.md](project_history.md).
 | [stageB_mission_runs.md](stageB_mission_runs.md) | the command layer on the robot: closed-loop turns, the demo sequence, the four abort paths |
 | [stageC_nl_eval.md](stageC_nl_eval.md) | English instructions: choosing the model, the offline eval, results on the robot |
 | [stageD_policy_swap.md](stageD_policy_swap.md) | installing a policy with one command, accepted on the robot |
+| [v2_policy.md](v2_policy.md) | the v2 policy: why v1 crept forward on a zero command, the two-stage retrain, backward and sideways walking, deployed on the robot |
+| [stageE_perception.md](stageE_perception.md) | seeing objects and walking to them: built and tested on the dev box, robot pending |
 | [int8_waiver.md](int8_waiver.md) | why INT8 quantization was dropped, on three measurements |
 | [pg2_untethered.md](pg2_untethered.md) | evidence for 60 s of walking without the gantry (≥ 79.7 s recorded) |
 | **simulation checks** | |

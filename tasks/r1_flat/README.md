@@ -1,17 +1,19 @@
 # tasks/r1_flat/
 
 `Isaac-Velocity-Flat-R1-v0`: R1 walking on flat ground, tracking a commanded forward
-speed and yaw rate. The deployed policy
+speed and yaw rate. The v1 policy
 ([`models/week04_nohead/`](../../models/week04_nohead/)) was trained on this task as it
-stands.
+stands. `Isaac-Velocity-Flat-R1-v2` builds on it and trained the v2 policy
+([`models/v2_drift_ft/`](../../models/v2_drift_ft/README.md)).
 
 | file | what's in it |
 |---|---|
 | `__init__.py` | `gym.register()` for `Isaac-Velocity-Flat-R1-v0` and its `-Play-v0` variant (fewer envs, no randomization), both with the PPO config as `rsl_rl_cfg_entry_point` |
 | `flat_env_cfg.py` | `R1FlatEnvCfg`: scene, commands, actions, observations, randomization events, rewards, terminations, command curriculum. Each config class's docstring says why it is the way it is |
 | `mdp.py` | R1-specific terms not in Isaac Lab: the touchdown-gated swing reward, the command-range curriculum, the action-level control delay |
+| `flat_v2_env_cfg.py` | `R1FlatV2EnvCfg`, task `Isaac-Velocity-Flat-R1-v2`, the policy of release v2.0.0: v1 plus backwards, sideways and faster turns, and no drift on a zero command. See [v2](#v2) |
 | `symmetry.py` | the left/right mirror map for PPO's symmetry augmentation |
-| `agents/rsl_rl_ppo_cfg.py` | PPO hyperparameters, seed 42, 3000 iterations, symmetry augmentation on |
+| `agents/rsl_rl_ppo_cfg.py` | PPO hyperparameters, seed 42, 3000 iterations, symmetry augmentation on; v2 runs 4000 + an 800-iteration second stage and logs to `logs/rsl_rl/r1_flat_v2/` |
 
 ## The task in one table
 
@@ -44,6 +46,33 @@ Each is fixed in the code and explained where it is fixed; listed so nobody undo
   `scripts/inspect_r1.py` before training.
 
 Longer write-ups of each are in [`scripts/README.md`](../../scripts/README.md#known-pitfalls).
+
+## v2
+
+v1 creeps forward on a zero command: **+0.047 m/s, 0.45 m per 10 s**, the same in every
+simulated env, with both feet stepping. So it is the policy's own bias, already present in
+simulation. Three things let it survive training:
+- zero was the edge of the trained range (forward 0 → 1.0);
+- only 2 % of envs ever saw a zero command;
+- the tracking reward is wide enough that the drift cost it under 1 %.
+
+v2 keeps v1's observation and action interface (425 → 24) and changes only the commands
+and five rewards:
+
+| | v1 | v2 |
+|---|---|---|
+| forward | 0 → 1.0 m/s | −0.6 → 1.0 m/s |
+| sideways | 0 | ±0.5 m/s |
+| yaw rate | ±0.5 rad/s | ±1.57 rad/s, heading control on for half the envs |
+| zero-command envs | 2 % | 15 % |
+| velocity tracking | exp kernel, std 0.5 | the same, plus a narrow one (std 0.15, weight 0.5) |
+| swing reward on a zero command | not paid | paid: a zero command means stepping in place |
+| drift on a zero command | not checked | penalized on the velocity averaged over ~1 s, so the step-to-step sway does not hide it; **only in a second stage, 800 iterations resumed from the 4000-iteration gait**: on from the start, the robot learned to stand still and to ignore commands up to 0.1 m/s and 0.5 rad/s |
+| feet closer than 0.07 m sideways | not checked | penalized (no self-collisions in sim) |
+
+The reasoning for each line is in the module docstring of `flat_v2_env_cfg.py`. Both
+policies are measured with `scripts/eval_command_grid.py`. Results, the four runs and the
+robot: [docs/v2_policy.md](../../docs/v2_policy.md).
 
 ## History
 

@@ -74,3 +74,19 @@ class R1FlatPPORunnerCfg(RslRlOnPolicyRunnerCfg):
             data_augmentation_func=mirror_obs_actions,
         ),
     )
+
+
+@configclass
+class R1FlatV2PPORunnerCfg(R1FlatPPORunnerCfg):
+    """v2 (tasks/r1_flat/flat_v2_env_cfg.py): same PPO, longer run.
+
+    v2's command space is wider than v1's in every axis (backwards, sideways,
+    yaw rates three times larger) and its curriculum ramps over 1500
+    iterations instead of 1000, so it gets 4000 iterations instead of 3000.
+    That is stage 1; stage 2 resumes for 800 more with the zero-command drift
+    penalty (commands and reasons in flat_v2_env_cfg.py).
+    Logged under its own experiment folder so v1 runs and v2 runs never mix.
+    """
+
+    max_iterations = 4000
+    experiment_name = "r1_flat_v2"

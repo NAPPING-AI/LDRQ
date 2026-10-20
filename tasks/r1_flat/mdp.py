@@ -33,6 +33,7 @@ from isaaclab.envs.mdp.actions import JointPositionAction, JointPositionActionCf
 from isaaclab.managers import ManagerTermBase, SceneEntityCfg
 from isaaclab.utils import configclass
 from isaaclab.utils.buffers import DelayBuffer
+from isaaclab.utils.math import quat_rotate_inverse, yaw_quat
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedEnv, ManagerBasedRLEnv
@@ -45,6 +46,7 @@ def feet_swing_touchdown(
     sensor_cfg: SceneEntityCfg,
     min_swing_time: float = 0.15,
     threshold: float = 0.45,
+    min_command: float = 0.1,
 ) -> torch.Tensor:
     """Reward each *completed* swing, settled at the moment the foot touches down.
 
@@ -59,6 +61,10 @@ def feet_swing_touchdown(
       since taps land far more often.)
     - credit saturates at ``threshold`` -- no bonus for dangling a leg longer.
 
+    Only paid while the commanded planar speed exceeds ``min_command``. v1 used
+    0.1, so a zero command paid nothing for stepping; v2 passes 0.0 because it
+    is asked to step in place on a zero command (see flat_v2_env_cfg.py).
+
     Because it only pays on touchdown (~2 frames per gait cycle rather than
     every frame), this term needs a much larger weight than the per-frame
     term it replaces to carry comparable influence.
@@ -68,8 +74,9 @@ def feet_swing_touchdown(
     last_air_time = contact_sensor.data.last_air_time[:, sensor_cfg.body_ids]
     credit = torch.clamp(torch.clamp(last_air_time, max=threshold) - min_swing_time, min=0.0)
     reward = torch.sum(credit * first_contact, dim=1)
-    # no reward when the robot isn't asked to move
-    reward *= torch.norm(env.command_manager.get_command(command_name)[:, :2], dim=1) > 0.1
+    # no reward when the robot isn't asked to move (v1); v2 sets min_command=0
+    if min_command > 0.0:
+        reward *= torch.norm(env.command_manager.get_command(command_name)[:, :2], dim=1) > min_command
     return reward
 
 
@@ -86,6 +93,77 @@ def feet_air_time_excess_l1(
     contact_sensor = env.scene.sensors[sensor_cfg.name]
     current_air_time = contact_sensor.data.current_air_time[:, sensor_cfg.body_ids]
     return torch.sum(torch.clamp(current_air_time - max_air_time, min=0.0), dim=1)
+
+
+def feet_lateral_gap_below(
+    env: "ManagerBasedRLEnv", asset_cfg: SceneEntityCfg, min_gap: float = 0.07
+) -> torch.Tensor:
+    """Penalize the feet coming closer than ``min_gap`` sideways, in the yaw frame.
+
+    ``asset_cfg.body_ids`` must be (left foot, right foot) in that order. The gap
+    is signed (left minus right along the body's y axis), so legs that *cross*
+    give a negative gap and a larger penalty, not a small one.
+
+    v2 needs this and v1 did not: R1 is simulated without self-collisions
+    (assets/r1/r1.py), and v1 never stepped sideways or turned faster than 0.5
+    rad/s, so its feet never met. Lateral stepping and fast turns can pass one
+    leg through the other in sim, which the real robot cannot do.
+    """
+    asset = env.scene[asset_cfg.name]
+    feet = asset.data.body_pos_w[:, asset_cfg.body_ids]
+    delta_b = quat_rotate_inverse(yaw_quat(asset.data.root_quat_w), feet[:, 0] - feet[:, 1])
+    gap = delta_b[:, 1]
+    return torch.clamp(min_gap - gap, min=0.0)
+
+
+class zero_command_drift(ManagerTermBase):
+    """On a zero command, penalize the *average* planar velocity, not the instantaneous one.
+
+    v2's first run (``2026-10-16_15-51-33_v2``) still crept forward at
+    +0.026 m/s on a zero command, the same in every env, despite a narrow
+    (std 0.15) tracking kernel. The kernel sees the instantaneous velocity, and
+    stepping in place sways the pelvis by several cm/s each step, so a steady
+    0.026 m/s offset is a small part of what it measures (it cost ~3 % of that
+    term). Drift is the mean over gait cycles; this term measures exactly that.
+
+    Velocity is low-passed with time constant ``tau`` (an exponential moving
+    average in the yaw-aligned body frame), which attenuates the ~1 Hz sway to
+    about a sixth and passes a steady offset unchanged. The penalty is the norm
+    of that average, so its gradient does not vanish as the drift gets small,
+    unlike a squared or exp-kernel term.
+
+    The average restarts from zero when an env's command becomes zero (and on
+    reset), so a walk's leftover velocity does not land on the zero-command
+    window as a penalty the policy could do nothing about.
+    """
+
+    def __init__(self, cfg, env: "ManagerBasedRLEnv"):
+        super().__init__(cfg, env)
+        self._avg = torch.zeros(env.num_envs, 2, device=env.device)
+        self._was_zero = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
+
+    def reset(self, env_ids: Sequence[int] | None = None) -> None:
+        if env_ids is None:
+            env_ids = slice(None)
+        self._avg[env_ids] = 0.0
+        self._was_zero[env_ids] = False
+
+    def __call__(
+        self,
+        env: "ManagerBasedRLEnv",
+        command_name: str,
+        tau: float = 1.0,
+        asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    ) -> torch.Tensor:
+        asset = env.scene[asset_cfg.name]
+        is_zero = torch.norm(env.command_manager.get_command(command_name), dim=1) < 1.0e-6
+        # restart the average on entering a zero command
+        self._avg[is_zero & ~self._was_zero] = 0.0
+        self._was_zero = is_zero
+        vel = quat_rotate_inverse(yaw_quat(asset.data.root_quat_w), asset.data.root_lin_vel_w)[:, :2]
+        alpha = min(env.step_dt / tau, 1.0)
+        self._avg = (1.0 - alpha) * self._avg + alpha * vel
+        return torch.norm(self._avg, dim=1) * is_zero
 
 
 class DelayedJointPositionAction(JointPositionAction):

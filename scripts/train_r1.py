@@ -34,7 +34,7 @@ continue toward the same original target instead of restarting from zero):
     #    target and end up training past where you meant to stop).
     ~/IsaacLab/isaaclab.sh -p scripts/train_r1.py --task=Isaac-Velocity-Flat-R1-v0 \
         --headless --num_envs 4096 --max_iterations 1500 --run_name my_run \
-        --resume --load_run <the_run_folder_from_step_1> --load_checkpoint model_300.pt
+        --resume --load_run <the_run_folder_from_step_1> --checkpoint model_300.pt
 Resuming always writes a *new* timestamped log folder (weights/iteration
 counter are loaded from the old one, but training continues into a fresh
 directory) -- this matches upstream rsl_rl behavior, so a fully continued

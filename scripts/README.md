@@ -29,6 +29,7 @@ Every script documents its arguments in its module docstring (`--help` works too
 | `train_r1.py` | train the policy with rsl_rl PPO | `logs/rsl_rl/r1_flat/<run_id>/` (not tracked) |
 | `play_r1.py` | replay a checkpoint, record a video, export TorchScript and ONNX | `<run>/videos/`, `<run>/exported/` |
 | `eval_baseline.py` | speed-tracking error, falls and energy at fixed commanded speeds (the PG-1 number) | `<run>/baseline[_tag].md` |
+| `eval_command_grid.py` | body velocity, drift per 10 s, air fraction and foot gap at fixed (vx, vy, wz) commands, the zero command included (v2's acceptance numbers) | `<run>/command_grid[_tag].md` |
 | `diagnose_gait.py` | per-foot gait statistics: does it actually walk? | `<run>/gait_diagnosis.txt` |
 | `archive_run.py` | copy a run's config and final metrics into `experiments/` (plain python) | `experiments/<run_id>/` |
 | `verify_repro.py` | check that current code still produces a run's exact config | `experiments/<run_id>/repro_check.txt` |

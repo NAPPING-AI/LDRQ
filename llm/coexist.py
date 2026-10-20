@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Does the 50 Hz control loop keep its timing while a local model decodes on the
-same Orin NX? (stage C, plan 3.6)
+"""Does the 50 Hz control loop keep its timing while a local model decodes, and the
+detector runs, on the same Orin NX? (stage C, plan 3.6; stage E)
 
 Runs load phases against the model server -- idle, continuous GPU decode, the real
 `ask` request back to back, continuous CPU decode, idle again -- while the stack is
@@ -28,12 +28,22 @@ while it decodes, the policy's TensorRT inference waits for the GPU, up to about
 It stays on the GPU by decision; the targets are what GPU-side optimization aims at.
 Four CPU threads met both tiers.
 
+Stage E adds two phases that start the perception node themselves (--perception-cmd,
+its output saved next to the result) and stop it afterwards:
+  yolo       the detector alone (YOLOX-Nano, TensorRT, on the GPU)
+  yolo+ask   the detector and real `ask` requests at once (the model on the CPU)
+In those phases the policy's inference p99 <= 10 % of the control period (2 ms) is a
+LIMIT, not a target -- stage E's acceptance -- and the detector must publish at
+10-15 Hz, read from its own stats line:
+  PERCEPTION | 12.5 Hz | frames 62 | infer ms p50=.. p95=.. p99=.. max=.. | total ms ...
+
 Robot, stack up in terminal 1 with its output saved:
   PYTHONUNBUFFERED=1 ros2 launch r1_hw_bridge r1_stack.launch.py ... 2>&1 | tee ~/orin_commissioning/stack_$(date +%H%M%S).log
 Terminal 2:
   python3 coexist.py --stack-log ~/orin_commissioning/stack_XXXXXX.log
   python3 coexist.py --report ~/orin_commissioning/coexist_XXXXXX.json   # re-print
   python3 coexist.py --selftest                                          # no robot, no model
+  python3 coexist.py --stack-log ... --phases idle,yolo,ask,yolo+ask,idle     # stage E
 
 Stdlib only, Python 3.8.
 """
@@ -67,6 +77,11 @@ RX_POLICY = re.compile(
 RX_SLOW = re.compile(TS + r" \[r1_hw_bridge\]: observation rate ([\d.]+) Hz below")
 RX_DEGR = re.compile(TS + r" \[r1_hw_bridge\]: DEGRADED: (.*)")
 RX_LAGW = re.compile(TS + r" \[r1_hw_bridge\]: setpoint lag p95=([\d.]+) ms exceeds")
+RX_PERC = re.compile(
+    TS + r" \[r1_perception\]: PERCEPTION \| ([\d.]+) Hz \| frames (\d+) \| infer ms "
+    r"p50=([\d.]+) p95=([\d.]+) p99=([\d.]+) max=([\d.]+) \| total ms p50=([\d.]+) "
+    r"p99=([\d.]+) \| trigger (\w+)")
+PERCEPTION_HZ = (10.0, 15.0)
 
 LOAD_PROMPT = ("Write the numbers from 1 to 400 in words, separated by commas, "
                "and nothing else.")
@@ -74,8 +89,15 @@ LOAD_PROMPT = ("Write the numbers from 1 to 400 in words, separated by commas, "
 
 # ------------------------------------------------------------------ parsing
 def parse_log(lines):
-    ev = {"bridge": [], "policy": [], "slow": [], "degraded": [], "lagwarn": []}
+    ev = {"bridge": [], "policy": [], "slow": [], "degraded": [], "lagwarn": [], "perc": []}
     for line in lines:
+        m = RX_PERC.search(line)
+        if m:
+            ev["perc"].append({"t": float(m.group(1)), "hz": float(m.group(2)),
+                               "infer_p50": float(m.group(4)), "infer_p99": float(m.group(6)),
+                               "infer_max": float(m.group(7)), "total_p99": float(m.group(9)),
+                               "trigger": m.group(10)})
+            continue
         m = RX_BRIDGE.search(line)
         if m:
             ev["bridge"].append({"t": float(m.group(1)), "state": m.group(2),
@@ -120,6 +142,15 @@ def summarize_phase(ev, start, end):
                     "lag_max_max": max(x["lag_max"] for x in b),
                     "states": sorted(set(x["state"] for x in b)),
                     "output": sorted(set(x["output"] for x in b))})
+    q = [x for x in ev.get("perc", []) if start + 5.0 <= x["t"] <= end + 0.5]
+    if q:
+        out.update({"perception_samples": len(q),
+                    "perception_hz_min": min(x["hz"] for x in q),
+                    "perception_hz_max": max(x["hz"] for x in q),
+                    "yolo_infer_p50_ms": statistics.median(x["infer_p50"] for x in q),
+                    "yolo_infer_p99_ms": max(x["infer_p99"] for x in q),
+                    "yolo_total_p99_ms": max(x["total_p99"] for x in q),
+                    "perception_trigger": sorted(set(x["trigger"] for x in q))})
     if p:
         out.update({"policy_hz_min": min(x["hz"] for x in p),
                     "infer_p50_median": statistics.median(x["p50"] for x in p),
@@ -134,10 +165,11 @@ def summarize_phase(ev, start, end):
 LIMIT, TARGET = "limit", "target"
 
 
-def verdict(phase, idle):
+def verdict(phase, idle, stage_e=False):
     """The criteria for one phase, against the idle baseline, as (tier, name, ok,
     detail). Limits are what the control loop cannot give up; targets are plan 3.6 as
-    written (see the module docstring)."""
+    written (see the module docstring). `stage_e` (a phase with the detector running):
+    the 2 ms inference p99 becomes a limit, and the detector's own rate is checked."""
     if not phase.get("bridge_samples") or not phase.get("policy_samples"):
         return [(LIMIT, "enough samples", False,
                  "bridge {} / policy {} lines in the window".format(
@@ -145,6 +177,32 @@ def verdict(phase, idle):
     budget = phase.get("budget_us", 20000)
     step_ms = budget / 1000.0
     base = idle.get("lag_p95_max") if idle else None
+    if stage_e:
+        lo, hi = PERCEPTION_HZ
+        has = bool(phase.get("perception_samples"))
+        return [
+            (LIMIT, "obs >= 45 Hz, no slow window, no DEGRADED",
+             phase["obs_hz_min"] >= 45.0 and phase["slow_windows"] == 0 and phase["degraded"] == 0,
+             "min {:.1f} Hz, {} slow windows, {} degraded".format(
+                 phase["obs_hz_min"], phase["slow_windows"], phase["degraded"])),
+            (LIMIT, "no failed inference, max < {:.0f} us".format(budget),
+             phase.get("failures", 0) == 0 and phase["infer_max_max"] < budget,
+             "{} failed, max {} us".format(phase.get("failures", 0), phase["infer_max_max"])),
+            (LIMIT, "infer p99 <= {:.0f} us (stage E)".format(0.1 * budget),
+             phase["infer_p99_max"] <= 0.1 * budget, "p99 max {} us".format(phase["infer_p99_max"])),
+            (LIMIT, "lag p95 < one step ({:.0f} ms)".format(step_ms),
+             phase["lag_p95_max"] < step_ms, "p95 max {:.1f} ms".format(phase["lag_p95_max"])),
+            (LIMIT, "detector {:.0f}-{:.0f} Hz (stage E)".format(lo, hi),
+             has and phase["perception_hz_min"] >= lo and phase["perception_hz_max"] <= hi,
+             "{:.1f}-{:.1f} Hz, YOLO p99 {:.1f} ms, trigger {}".format(
+                 phase["perception_hz_min"], phase["perception_hz_max"],
+                 phase["yolo_infer_p99_ms"], ",".join(phase["perception_trigger"]))
+             if has else "no PERCEPTION lines in the window (did the node start?)"),
+            (TARGET, "lag p95 <= idle + 1 ms (plan 3.6)",
+             base is None or phase["lag_p95_max"] <= base + 1.0,
+             "p95 max {:.1f} ms (idle {})".format(
+                 phase["lag_p95_max"], "{:.1f} ms".format(base) if base is not None else "n/a")),
+        ]
     return [
         (LIMIT, "obs >= 45 Hz, no slow window, no DEGRADED",
          phase["obs_hz_min"] >= 45.0 and phase["slow_windows"] == 0 and phase["degraded"] == 0,
@@ -164,9 +222,13 @@ def verdict(phase, idle):
     ]
 
 
-def tiers_ok(phase, idle):
+def is_yolo(name):
+    return "yolo" in name
+
+
+def tiers_ok(phase, idle, stage_e=False):
     """(limits kept, targets met) for one phase."""
-    v = verdict(phase, idle)
+    v = verdict(phase, idle, stage_e)
     return (all(ok for t, _, ok, _ in v if t == LIMIT),
             all(ok for t, _, ok, _ in v if t == TARGET))
 
@@ -333,7 +395,7 @@ def placement_advice(res):
     idle = next((p["stack"] for p in phases if p["name"] == "idle"), None)
     seen = {True: [], False: []}
     for ph in phases:
-        where = on_gpu(ph) if ph["name"] != "idle" else None
+        where = on_gpu(ph) if ph["name"] != "idle" and not is_yolo(ph["name"]) else None
         if where is None:
             continue
         threads = None
@@ -377,7 +439,7 @@ def print_report(res):
     print("\nstack log: {}".format(res.get("stack_log")))
     print("model: {} at {}".format(res.get("model"), res.get("url")))
     hdr = ("phase", "obs Hz min", "slow/deg", "lag p50/p95 ms", "infer p50/p99/max us",
-           "LLM tok/s", "req", "RAM MB", "GPU %")
+           "LLM tok/s", "req", "YOLO Hz / p99 ms", "RAM MB", "GPU %")
     print("\n" + " | ".join(hdr))
     for ph in phases:
         s, l, tg = ph["stack"], ph.get("llm") or {}, ph.get("tegra") or {}
@@ -392,6 +454,9 @@ def print_report(res):
             if "infer_p99_max" in s else "-",
             "{:.1f}".format(rate) if rate else "-",
             str(l.get("requests", "-")),
+            "{:.1f}-{:.1f} / {:.1f}".format(s["perception_hz_min"], s["perception_hz_max"],
+                                            s["yolo_infer_p99_ms"])
+            if s.get("perception_samples") else "-",
             str(tg.get("ram_mb_max", "-")), str(tg.get("gpu_pct_mean", "-"))]))
     idle = next((p["stack"] for p in phases if p["name"] == "idle"), None)
     print()
@@ -399,7 +464,7 @@ def print_report(res):
     for ph in phases:
         if ph["name"] == "idle":
             continue
-        for tier, name, ok, detail in verdict(ph["stack"], idle):
+        for tier, name, ok, detail in verdict(ph["stack"], idle, is_yolo(ph["name"])):
             if tier == LIMIT:
                 all_ok = all_ok and ok
                 word = "PASS" if ok else "FAIL"
@@ -413,6 +478,12 @@ def print_report(res):
         "BROKEN -- see the FAIL lines; that placement cannot be used"))
     print("targets (plan 3.6): {}".format(
         "met in every load phase" if not missed else "missed in " + ", ".join(missed)))
+    ys = [ph for ph in phases if is_yolo(ph["name"])]
+    if ys:
+        ok_e = all(tiers_ok(ph["stack"], idle, True)[0] for ph in ys)
+        print("stage E (detector running): {}".format(
+            "PASS -- policy p99 <= 2 ms, obs 50 Hz, no DEGRADED, detector 10-15 Hz"
+            if ok_e else "FAIL -- see the FAIL lines of the yolo phases"))
     if res.get("ask_options") is not None:
         print("ask phase placement: {}".format(
             json.dumps(res["ask_options"], sort_keys=True) if res["ask_options"]
@@ -422,9 +493,10 @@ def print_report(res):
 
 
 # ----------------------------------------------------------------- selftest
-def synth(spec, placements=None, **extra):
+def synth(spec, placements=None, perc=None, **extra):
     """A synthetic run: stack log lines for each (phase, obs Hz, lag p50, lag p95,
-    infer p50, infer p99), summarized exactly as a real run is."""
+    infer p50, infer p99), summarized exactly as a real run is. `perc` maps a phase
+    index to the detector's (Hz, YOLO infer p99 ms) for its PERCEPTION lines."""
     t0 = 1790000000.0
     lines, phases = [], []
     t = t0
@@ -443,6 +515,14 @@ def synth(spec, placements=None, **extra):
             lines.append("[r1_policy_node-2] [INFO] [{:.9f}] [r1_policy_node]: 250 cycles in "
                          "5.0s (50.0 Hz) | infer us p50={} p95={} p99={} max={} | budget "
                          "20000 us | failures=0".format(ts + 0.2, i50, i99 - 50, i99, i99 + 100))
+            if perc and len(phases) - 1 in perc:
+                phz, pp99 = perc[len(phases) - 1]
+                lines.append("[INFO] [{:.9f}] [r1_perception]: PERCEPTION | {:.1f} Hz | frames "
+                             "{} | infer ms p50={:.2f} p95={:.2f} p99={:.2f} max={:.2f} | total "
+                             "ms p50={:.2f} p99={:.2f} | trigger policy | tensorrt 8.5.2.2 "
+                             "yolox_fp32.plan".format(ts + 0.4, phz, k * 62, pp99 * 0.8,
+                                                      pp99 * 0.95, pp99, pp99 + 0.5,
+                                                      pp99 + 2, pp99 + 4))
         if hz < 45:
             lines.append("[r1_hw_bridge_node-1] [WARN] [{:.9f}] [r1_hw_bridge]: observation "
                          "rate 43.0 Hz below 45.0 Hz (1/3)".format(start + 20))
@@ -521,6 +601,34 @@ def selftest():
     if "move the model to the CPU (llm_num_gpu: 0, llm_num_thread: 4)" not in placement_advice(r5):
         print("FAIL: GPU breaks a limit -> the CPU: {}".format(placement_advice(r5)))
         fails += 1
+    # Stage E: with the detector running, 2 ms p99 is a limit and the detector's rate is checked.
+    e = synth([real[0], ("yolo", 50.0, 0.7, 0.9, 470, 1450), ("yolo+ask", 50.0, 0.8, 1.0, 480, 1700),
+               ("yolo", 50.0, 0.9, 1.2, 600, 3200), ("yolo", 50.0, 0.7, 0.9, 470, 1450), real[4]],
+              {2: [cpu]}, perc={1: (12.5, 6.1), 2: (12.4, 7.0), 3: (12.5, 6.5)},
+              cpu_threads=4, ask_options={"num_gpu": 0, "num_thread": 4})
+    ie = e["phases"][0]["stack"]
+    if tiers_ok(e["phases"][1]["stack"], ie, True)[0] is not True or \
+            tiers_ok(e["phases"][2]["stack"], ie, True)[0] is not True:
+        print("FAIL: p99 1.45/1.7 ms and 12.5 Hz pass stage E: {}".format(
+            verdict(e["phases"][1]["stack"], ie, True)))
+        fails += 1
+    v3 = dict((n, ok) for _, n, ok, _ in verdict(e["phases"][3]["stack"], ie, True))
+    if v3.get("infer p99 <= 2000 us (stage E)") is not False:
+        print("FAIL: p99 3.2 ms with the detector is a broken LIMIT: {}".format(v3))
+        fails += 1
+    v4 = dict((n, ok) for _, n, ok, _ in verdict(e["phases"][4]["stack"], ie, True))
+    if v4.get("detector 10-15 Hz (stage E)") is not False:
+        print("FAIL: a yolo phase without PERCEPTION lines fails the detector check: {}".format(v4))
+        fails += 1
+    if e["phases"][1]["stack"].get("perception_trigger") != ["policy"]:
+        print("FAIL: the trigger is parsed: {}".format(e["phases"][1]["stack"]))
+        fails += 1
+    if print_report(e):
+        print("FAIL: a yolo phase over 2 ms must give a failing exit status")
+        fails += 1
+    if "no load phase with a known placement" not in placement_advice(e):
+        print("FAIL: yolo phases are not placements of the model: {}".format(placement_advice(e)))
+        fails += 1
     print("\nselftest: {}".format("OK" if not fails else "{} FAILURES".format(fails)))
     return 1 if fails else 0
 
@@ -532,7 +640,12 @@ def main(argv=None):
     ap.add_argument("--url", default=os.environ.get("R1_LLM_URL", "http://127.0.0.1:11434"))
     ap.add_argument("--model", default=os.environ.get("R1_LLM_MODEL", "qwen3:1.7b"))
     ap.add_argument("--phases", default="idle,gpu,ask,cpu,idle",
-                    help="comma list of idle | gpu | ask | cpu")
+                    help="comma list of idle | gpu | ask | cpu | yolo | yolo+ask")
+    ap.add_argument("--perception-cmd",
+                    default="python3 {} run".format(HERE.parent / "perception" / "r1_perception_cli.py"),
+                    help="starts the perception node for the yolo phases")
+    ap.add_argument("--perception-warmup-s", type=float, default=15.0,
+                    help="after starting the node: engine load, first frames")
     ap.add_argument("--phase-s", type=float, default=60.0)
     ap.add_argument("--cpu-threads", type=int, default=4,
                     help="threads for the cpu phase (0 = Ollama's default: every core)")
@@ -576,8 +689,19 @@ def main(argv=None):
         json.dumps(ask_opts, sort_keys=True) if ask_opts else "Ollama's default (the GPU)"))
 
     tegra = None if args.no_tegrastats else Tegrastats()
+    perc_log = out.with_name(out.stem + "_perception.log")
     phases = []
     for name in names:
+        perc = None
+        if is_yolo(name):
+            print("[{}] starting the perception node: {}".format(name, args.perception_cmd))
+            env = dict(os.environ, PYTHONUNBUFFERED="1")
+            perc = subprocess.Popen(args.perception_cmd, shell=True, env=env,
+                                    stdout=open(str(perc_log), "a"), stderr=subprocess.STDOUT,
+                                    preexec_fn=os.setsid)
+            time.sleep(args.perception_warmup_s)
+            if perc.poll() is not None:
+                print("  the perception node exited ({}); see {}".format(perc.returncode, perc_log))
         opts = phase_options(name, args.cpu_threads)
         if name in ("gpu", "cpu"):
             print("[{}] warm-up (loads the model {})...".format(
@@ -588,8 +712,9 @@ def main(argv=None):
                        "keep_alive": "30m", "options": dict(opts, num_predict=1)}, 300)
             except Exception as exc:  # noqa: BLE001
                 print("  warm-up failed: {}".format(exc))
-        elif name == "ask":
-            print("[ask] warm-up (one real request: the prompt, the schema, the placement)...")
+        elif name in ("ask", "yolo+ask"):
+            print("[{}] warm-up (one real request: the prompt, the schema, the placement)..."
+                  .format(name))
             try:
                 warm_ask(args.url, args.model, ask_opts)
             except Exception as exc:  # noqa: BLE001
@@ -600,15 +725,25 @@ def main(argv=None):
         print("[{}] {:.0f} s from {}".format(name, args.phase_s, time.strftime("%H:%M:%S")))
         if name in ("gpu", "cpu"):
             run_generate_load(args.url, args.model, opts, until, stats)
-        elif name == "ask":
+        elif name in ("ask", "yolo+ask"):
             run_ask_load(args.url, args.model, until, stats, ask_opts)
         else:
             time.sleep(args.phase_s)
         end = time.time()
+        llm_phase = name not in ("idle", "yolo")
         phases.append({"name": name, "start": start, "end": end,
-                       "llm": stats if name != "idle" else None,
-                       "placement": placement(args.url) if name != "idle" else None})
-        if name != "idle":
+                       "llm": stats if llm_phase else None,
+                       "placement": placement(args.url) if llm_phase else None})
+        if perc is not None:
+            time.sleep(6.0)          # one more PERCEPTION line inside the window
+            try:
+                os.killpg(os.getpgid(perc.pid), 2)
+                perc.wait(timeout=10)
+            except Exception:  # noqa: BLE001 -- already gone
+                pass
+            phases[-1]["end"] = end
+            time.sleep(3.0)          # let the GPU go quiet before the next phase
+        if llm_phase:
             rate = stats["tokens"] / stats["gen_s"] if stats["gen_s"] else 0.0
             print("  {} requests, {:.1f} tok/s, {} errors; placement {}".format(
                 stats["requests"], rate, stats["errors"], phases[-1]["placement"]))
@@ -617,11 +752,15 @@ def main(argv=None):
     time.sleep(8.0)
     if tegra:
         tegra.stop()
-    ev = parse_log(log.read_text(errors="replace").splitlines())
+    lines = log.read_text(errors="replace").splitlines()
+    if perc_log.is_file():
+        lines += perc_log.read_text(errors="replace").splitlines()
+    ev = parse_log(lines)
     for ph in phases:
         ph["stack"] = summarize_phase(ev, ph["start"], ph["end"])
         ph["tegra"] = tegra.summarize(ph["start"], ph["end"]) if tegra else None
-    res = {"stack_log": str(log), "url": args.url, "model": args.model, "server_version": ver,
+    res = {"stack_log": str(log), "perception_log": str(perc_log) if perc_log.is_file() else None,
+           "url": args.url, "model": args.model, "server_version": ver,
            "cpu_threads": args.cpu_threads, "ask_options": ask_opts, "phase_s": args.phase_s,
            "phases": phases, "when": time.strftime("%Y-%m-%dT%H:%M:%S%z")}
     out.write_text(json.dumps(res, indent=1))

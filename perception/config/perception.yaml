@@ -1,0 +1,89 @@
+# r1_perception settings. Flat key: value, read by a ten-line reader (no PyYAML on
+# the robot). Values marked PROBE come from `r1_perception_cli.py probe` and
+# `tools/calibrate_fisheye.py` on the robot (stage E §3.1-3.2); until then they are
+# placeholders and the node's angles and ranges mean nothing.
+
+# ---- camera source: stereo | ros | v4l2 | replay -------------------------------
+# stereo = the R1 head's stereo module (Unitree's "video stream service" page): the
+# LEFT camera's RGB over UDP RTP, depth from /dev/video-dep. Needs, after every boot:
+# APP video_hub OFF + "Stereo patch PC1" ON, and `sudo unitree_depth_start`.
+source: stereo
+stereo_rgb_port: 5002                     # left RGB, H264 (5004 = the raw left image, JPEG)
+stereo_codec: h264                        # h264 | jpeg
+stereo_decoder: auto                      # auto | nvv4l2decoder | avdec_h264
+stereo_depth_device: /dev/video-dep       # uint16 millimetres
+stereo_depth_width: 544
+stereo_depth_height: 448
+stereo_depth_max_age_s: 0.3               # older depth is not paired with a frame
+depth_aligned: 1                          # SESSION 3 checks this on an overlay
+rgb_topic: /camera/color/image_raw        # source ros only
+depth_topic:                              # source ros only; empty = no depth
+v4l2_device: 0
+v4l2_fps: 30
+replay_dir: ~/r1_captures/latest
+
+# ---- lens ---------------------------------------------------------------------------
+# The stereo module's left image is used as it comes (rectify: 0): a pinhole camera
+# with these intrinsics. cam_fx..cam_cy come from the module's cam_param.txt
+# (http://192.168.123.161:9080, session 3); until then fx is a placeholder (90 deg
+# horizontal) and bearings are only roughly right.
+cam_width: 544
+cam_height: 448
+cam_fx: 272.0                             # PROBE (cam_param.txt)
+cam_fy: 272.0                             # PROBE
+cam_cx: 271.5                             # PROBE
+cam_cy: 223.5                             # PROBE
+rectify: 0                                # 1 = a fisheye source, remapped with the below
+cam_k1: 0.0                               # fisheye only (tools/calibrate_fisheye.py)
+cam_k2: 0.0
+cam_k3: 0.0
+cam_k4: 0.0
+
+# Fisheye sources only (rectify: 1): the pinhole view YOLOX sees. 100 deg keeps the
+# edges usable; the lens's outer band is given up (a 150 deg pinhole image stretches its edges without bound).
+rect_width: 640
+rect_height: 480
+rect_hfov_deg: 100.0
+
+# ---- mount: where the camera is on the body ----------------------------------------
+cam_height_m: 1.20                        # PROBE: lens above the floor, standing
+cam_pitch_deg: 0.0                        # PROBE: positive = looking down
+cam_yaw_deg: 0.0                          # positive = looking left
+
+# ---- detection ---------------------------------------------------------------------
+# Two thresholds on purpose (tools/eval_detect.py calibrates both on robot images):
+#   safety_conf  low, single frame: a person too close stops the robot. Everything at
+#                or above it is published.
+#   target_conf  high, confirm_frames in a row: what turn_to / walk_to may act on. Set
+#                in mission.yaml (obj_target_conf), where the decision is made.
+safety_conf: 0.30
+nms_iou: 0.45
+confirm_frames: 3
+track_iou: 0.3
+track_max_misses: 2
+
+# ---- depth -------------------------------------------------------------------------
+box_shrink: 0.5                           # median over the central half of the box
+depth_min_m: 0.15
+depth_max_m: 10.0
+depth_min_valid: 0.1                      # fraction of the box with a return, else no depth
+
+# ---- per-frame safety facts (the mission layer acts on them) -------------------------
+person_stop_m: 1.2                        # a person nearer than this stops a walk
+person_box_frac: 0.8                      # no depth for a person: a box this tall = near
+obstacle_stop_m: 0.6
+corridor_half_width_m: 0.35
+corridor_min_height_m: 0.10               # above the floor: the floor is never an obstacle
+corridor_max_height_m: 1.9
+corridor_step: 4
+corridor_min_points: 30
+
+# ---- scheduling ----------------------------------------------------------------------
+# Run on every Nth /r1_policy_node/action, i.e. right after a policy inference: the GPU
+# is then idle for ~19 ms. 4 -> 12.5 Hz. The timer is the fallback without a stack.
+policy_ticks_per_frame: 4
+fallback_hz: 12.5
+
+# ---- operator snapshot ----------------------------------------------------------------
+snapshot_dir: ~/r1_snapshots
+snapshot_http_port: 0                     # e.g. 8090: GET / = the newest snapshot; 0 = off

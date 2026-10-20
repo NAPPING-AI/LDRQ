@@ -22,5 +22,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
-      - name: run_tests.sh (standard library only, nothing installed)
+      - name: numpy (the perception suite; everything else is standard library)
+        run: python -m pip install --quiet numpy
+      - name: run_tests.sh
         run: ./run_tests.sh -v

@@ -87,10 +87,16 @@ robot, qwen3:1.7b, the stack at kp 1.3, in two rounds (output off, then on):
 | model on | policy inference p99 | setpoint lag p95 | obs Hz | decode | limits | targets |
 |---|---|---|---|---|---|---|
 | — (idle) | 486 µs | 0.6 ms | 50.0 | | | |
-| **GPU (kept)** | 5010 µs | 5.1 ms | 50.0 | 32 tok/s | kept | **missed** (2000 µs; idle + 1 ms) |
-| CPU, 4 threads | 542 µs | 0.9 ms | 50.0 | 21 tok/s | kept | met |
+| GPU (stage C) | 5010 µs | 5.1 ms | 50.0 | 32 tok/s | kept | **missed** (2000 µs; idle + 1 ms) |
+| **CPU, 4 threads (shipped since stage E)** | 542 µs | 0.9 ms | 50.0 | 21 tok/s | kept | met |
 
-**Decision (2026-09-30): the model stays on the GPU; the GPU side is optimized later.**
+**Decision (2026-10-14, stage E): the model runs on the CPU, 4 threads.** The GPU is left
+to the walking policy and the object detector (`perception/`). `mission.yaml` ships
+`llm_num_gpu: 0`, `llm_num_thread: 4`; the decode rate is 21 tok/s, and a typical `ask`
+takes 1–2 s instead of 0.6–1 s. The stage E prompt was evaluated with this placement
+([docs/stageE_perception.md](../docs/stageE_perception.md)).
+
+**Earlier decision (2026-09-30, stage C): the model stayed on the GPU.**
 - On the GPU the policy waits for the GPU while the model decodes. Its inference runs at
   3.5 ms p50, with a steady ceiling of about 5 ms, which looks like the GPU's time slice.
 - Nothing misbehaved: no DEGRADED and no policy failure, with the robot standing too.
@@ -102,8 +108,8 @@ robot, qwen3:1.7b, the stack at kp 1.3, in two rounds (output off, then on):
 - For the record, the CPU: with 8 threads, qwen3:1.7b decodes at 24 tok/s, p50 1.1 s per
   instruction (0.65 s on the GPU). The first request after a load takes 11 s, because the
   prompt is processed on the CPU.
-- Switching is two lines in `mission.yaml` (`llm_num_gpu: 0`, `llm_num_thread: 4`).
-  `warm`, `health` and `ask` then all send the same placement.
+- Switching is two lines in `mission.yaml` (`llm_num_gpu`, `llm_num_thread`). `warm`,
+  `health` and `ask` then all send the same placement.
 
 ## Known pitfalls, and what handles each
 

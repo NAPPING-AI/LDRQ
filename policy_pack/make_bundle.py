@@ -19,6 +19,11 @@ head), and putting it in a per-policy file invites someone to "fix" it.
 The envelope is read from the TRAINING config (tasks/r1_flat/flat_env_cfg.py,
 COMMAND_RANGES_FINAL) rather than from bridge.yaml, so the bundle records what
 training actually covered and not what the last operator happened to allow.
+
+A policy other than the deployed one (v2) brings its own interface and artifacts:
+
+    ./make_bundle.py --task-cfg ../tasks/r1_flat/flat_v2_env_cfg.py \
+        --interface ../models/v2_drift_ft/interface --artifacts ../models/v2_drift_ft
 """
 from __future__ import annotations
 
@@ -60,40 +65,50 @@ def git_sha(repo: pathlib.Path) -> str:
 
 
 def envelope_from_task(task_cfg: pathlib.Path) -> dict:
-    """Parse COMMAND_RANGES_FINAL and the pinned lin_vel_y out of the task cfg.
+    """Parse the curriculum's final command ranges out of the task cfg.
 
-    Parsed rather than imported: importing flat_env_cfg.py pulls in Isaac Lab,
-    which needs a working GPU driver, and a bundle must be buildable on a box
-    where the simulator is not runnable.
+    Parsed rather than imported: importing the cfg pulls in Isaac Lab, which
+    needs a working GPU driver, and a bundle must be buildable on a box where
+    the simulator is not runnable.
+
+    v1 (flat_env_cfg.py) has COMMAND_RANGES_FINAL with vx and wz, and lin_vel_y
+    pinned in the command cfg. v2 (flat_v2_env_cfg.py) has
+    COMMAND_RANGES_FINAL_V2 with all three axes. Exactly one such dict must be
+    in the file.
     """
     text = task_cfg.read_text()
-    m = re.search(r"COMMAND_RANGES_FINAL\s*=\s*\{(.+?)\}", text, re.S)
-    if not m:
-        raise SystemExit("[fail] COMMAND_RANGES_FINAL not found in " + str(task_cfg))
-    body = m.group(1)
+    found = re.findall(r"^(COMMAND_RANGES_FINAL\w*)\s*=\s*\{(.+?)\}", text, re.S | re.M)
+    if len(found) != 1:
+        raise SystemExit("[fail] expected one COMMAND_RANGES_FINAL* dict in {}, found {}"
+                         .format(task_cfg, [n for n, _ in found] or "none"))
+    name, body = found[0]
 
-    def pair(key):
-        mm = re.search(re.escape(key) + r"\"\s*:\s*\(\s*([-\d.]+)\s*,\s*([-\d.]+)\s*\)", body)
+    def pair(key, src=body, where=name):
+        mm = re.search(re.escape(key) + r"\"\s*:\s*\(\s*([-\d.]+)\s*,\s*([-\d.]+)\s*\)", src)
         if not mm:
-            raise SystemExit("[fail] {} missing from COMMAND_RANGES_FINAL".format(key))
+            raise SystemExit("[fail] {} missing from {}".format(key, where))
         return [float(mm.group(1)), float(mm.group(2))]
 
     vx, wz = pair("lin_vel_x"), pair("ang_vel_z")
-
-    # lin_vel_y is not in the curriculum dict: it is pinned in the command cfg
-    # and stays pinned. Confirm that rather than assume it.
-    my = re.search(r"lin_vel_y\s*=\s*\(\s*([-\d.]+)\s*,\s*([-\d.]+)\s*\)", text)
-    if not my:
-        raise SystemExit("[fail] lin_vel_y not found in " + str(task_cfg))
-    vy = [float(my.group(1)), float(my.group(2))]
+    if '"lin_vel_y"' in body:
+        vy = pair("lin_vel_y")
+        vy_src = name
+    else:
+        # v1: lin_vel_y is not in the curriculum dict; it is pinned in the
+        # command cfg and stays pinned. Confirm that rather than assume it.
+        my = re.search(r"lin_vel_y\s*=\s*\(\s*([-\d.]+)\s*,\s*([-\d.]+)\s*\)", text)
+        if not my:
+            raise SystemExit("[fail] lin_vel_y not found in " + str(task_cfg))
+        vy = [float(my.group(1)), float(my.group(2))]
+        vy_src = "UniformVelocityCommandCfg.ranges.lin_vel_y"
 
     return {
-        "source": "tasks/r1_flat/flat_env_cfg.py COMMAND_RANGES_FINAL + "
-                  "UniformVelocityCommandCfg.ranges.lin_vel_y",
+        "source": "tasks/r1_flat/{} {}{}".format(
+            task_cfg.name, name, "" if vy_src == name else " + " + vy_src),
         "vx": vx,
         "vy": vy,
         "wz": wz,
-        "note": "The end point of W04's command curriculum. This is what "
+        "note": "The end point of the training command curriculum. This is what "
                 "training covered, not a comfort limit. An axis pinned to "
                 "[0, 0] is REFUSED by the bridge, not clamped: it does not "
                 "exist in the training distribution.",
@@ -111,6 +126,9 @@ def main() -> int:
                     help="directory to create the bundle under")
     ap.add_argument("--run", default=None,
                     help="run id (default: the 'run' field of policy_interface.json)")
+    ap.add_argument("--interface", default=None,
+                    help="directory holding policy_interface.json + actuator_gains.json "
+                         "(default: <deploy>/interface, the deployed policy's)")
     ap.add_argument("--artifacts", default=None,
                     help="directory holding policy.onnx + parity_fixture.bin (default: "
                          "<deploy>/artifacts, else the models/<name>/ matching the run id)")
@@ -119,6 +137,8 @@ def main() -> int:
 
     deploy = pathlib.Path(args.deploy).expanduser().resolve()
     iface, artifacts = deploy / "interface", deploy / "artifacts"
+    if args.interface:
+        iface = pathlib.Path(args.interface).expanduser().resolve()
 
     spec_path = iface / "policy_interface.json"
     if not spec_path.is_file():

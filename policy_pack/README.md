@@ -47,6 +47,23 @@ build (TensorRT picks kernels by timing them); **parity** is what proves the num
 plan's size and fingerprint, so "which policy is running on the robot right now" is a fact
 you read, not something you have to remember.
 
+### A policy that is not the deployed one (v2)
+
+`make_bundle.py` reads the deployed policy's interface from `deploy/interface/` by
+default. A new policy brings its own, exported next to its artifacts, and its own task
+config for the envelope:
+
+```bash
+python3 policy_pack/make_bundle.py --task-cfg tasks/r1_flat/flat_v2_env_cfg.py \
+    --interface models/v2_drift_ft/interface --artifacts models/v2_drift_ft
+```
+
+The envelope is parsed from the task's one `COMMAND_RANGES_FINAL*` dict: v1's has vx
+and wz, with vy pinned in the command cfg; v2's has all three axes. The interface comes
+from `deploy/tools/dump_interface.py --task ... --run ... --out ...` and
+`dump_actuator_gains.py --spec ... --out ...`, which leave `deploy/interface/` (the
+deployed policy's) alone.
+
 ## Design
 
 ### What a bundle is

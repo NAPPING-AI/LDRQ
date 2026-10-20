@@ -18,6 +18,7 @@ ever stops being literals, ast fails loudly instead of guessing.
 
   python3 dump_actuator_gains.py            # writes interface/actuator_gains.json
   python3 dump_actuator_gains.py --check    # verify the existing file is current
+  python3 dump_actuator_gains.py --spec <dir>/policy_interface.json --out <dir>/actuator_gains.json
 """
 import argparse
 import ast
@@ -89,8 +90,8 @@ def resolve(groups, joint_names):
     return out
 
 
-def build():
-    spec = json.loads(SPEC.read_text())
+def build(spec_path=SPEC):
+    spec = json.loads(spec_path.read_text())
     names = spec["articulation"]["joint_names"]
     groups = parse_groups(ASSET)
     assign = resolve(groups, names)
@@ -113,24 +114,28 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--check", action="store_true",
                     help="fail if the committed file differs from a fresh extract")
+    ap.add_argument("--spec", default=str(SPEC),
+                    help="policy_interface.json to take the joint order and run id from")
+    ap.add_argument("--out", default=str(OUT), help="file to write (or check)")
     args = ap.parse_args()
+    out = pathlib.Path(args.out)
 
-    data = build()
+    data = build(pathlib.Path(args.spec))
     text = json.dumps(data, indent=2) + "\n"
 
     if args.check:
-        if not OUT.exists():
-            print(f"[fail] {OUT} does not exist", file=sys.stderr)
+        if not out.exists():
+            print(f"[fail] {out} does not exist", file=sys.stderr)
             return 1
-        if OUT.read_text() != text:
-            print(f"[fail] {OUT} is stale -- rerun without --check", file=sys.stderr)
+        if out.read_text() != text:
+            print(f"[fail] {out} is stale -- rerun without --check", file=sys.stderr)
             return 1
-        print(f"[ok] {OUT.name} matches {ASSET.name}")
+        print(f"[ok] {out.name} matches {ASSET.name}")
         return 0
 
-    OUT.write_text(text)
+    out.write_text(text)
     n = len(data["joint_names"])
-    print(f"{OUT}: {n} joints across {len(data['groups'])} actuator groups")
+    print(f"{out}: {n} joints across {len(data['groups'])} actuator groups")
     for g, gv in data["groups"].items():
         members = [data["joint_names"][i] for i, a in enumerate(data["group"]) if a == g]
         print(f"  {g:<8} kp={gv['stiffness']:>5.1f} kd={gv['damping']:>4.1f} "

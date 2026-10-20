@@ -45,6 +45,12 @@ sys.path.insert(0, str(_PROJECT_ROOT))
 parser = argparse.ArgumentParser(description="Dump the R1 policy deployment interface.")
 parser.add_argument("--task", type=str, default="Isaac-Velocity-Flat-R1-Play-v0", help="Task to introspect.")
 parser.add_argument("--num_envs", type=int, default=1, help="Only one env is needed.")
+parser.add_argument("--run", type=str, default="2026-08-19_11-03-32_week04_nohead",
+                    help="Run id recorded in the contract (default: the deployed policy).")
+parser.add_argument("--out", type=str, default=None,
+                    help="Write policy_interface.json/.md here instead of deploy/interface/, and "
+                         "leave the runner yaml alone (on the robot, policy_pack/gen_configs.py "
+                         "writes it from the bundle). For a policy that is not the deployed one.")
 parser.add_argument(
     "--disable_fabric", action="store_true", default=False, help="Disable fabric and use USD I/O operations."
 )
@@ -127,7 +133,7 @@ def main():
     control_dt = float(env_cfg.sim.dt) * int(env_cfg.decimation)
 
     contract = {
-        "run": "2026-08-19_11-03-32_week04_nohead",
+        "run": args_cli.run,
         "task": args_cli.task,
         "control": {
             "sim_dt": float(env_cfg.sim.dt),
@@ -163,7 +169,7 @@ def main():
     }
 
     # -- write -------------------------------------------------------------
-    out_dir = _DEPLOY_ROOT / "interface"
+    out_dir = Path(args_cli.out).resolve() if args_cli.out else _DEPLOY_ROOT / "interface"
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "policy_interface.json").write_text(json.dumps(contract, indent=2) + "\n")
 
@@ -187,7 +193,8 @@ def main():
         f"    action_scale: {_yaml_float_list(scale_list)}",
         f"    default_joint_pos: {_yaml_float_list(action_default)}",
     ]
-    (cfg_dir / "policy_interface.yaml").write_text("\n".join(yaml_lines) + "\n")
+    if not args_cli.out:
+        (cfg_dir / "policy_interface.yaml").write_text("\n".join(yaml_lines) + "\n")
 
     md = [
         "# R1 policy deployment interface",
@@ -247,7 +254,8 @@ def main():
     print(f"[ok] control {control_dt * 1000:.1f} ms ({contract['control']['control_rate_hz']:.1f} Hz)")
     print(f"[ok] wrote {out_dir/'policy_interface.json'}")
     print(f"[ok] wrote {out_dir/'policy_interface.md'}")
-    print(f"[ok] wrote {cfg_dir/'policy_interface.yaml'}")
+    if not args_cli.out:
+        print(f"[ok] wrote {cfg_dir/'policy_interface.yaml'}")
 
     env.close()
 

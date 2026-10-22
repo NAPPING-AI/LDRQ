@@ -100,7 +100,7 @@ obj_align_tol_deg: 8     # walk_to: turn first when the target is further off th
 obj_segment_m: 1.0       # walk_to: longest walk between two measurements
 obj_vx: 0.3
 obj_stop_default_m: 1.0  # walk_to when no distance was said (shown in the plan)
-obj_stop_min_m: 0.8      # above perception.yaml obstacle_stop_m (0.6)
+obj_stop_min_m: 0.9      # V3: above the obstacle stop distance at obj_vx (0.87 m at 0.3 m/s, v3/reflex/stop_distance.py)
 obj_max_range_m: 5.0     # PROBE: how far the depth camera is trusted
 obj_max_segments: 10
 obj_person_stop_m: 1.2   # = perception.yaml person_stop_m

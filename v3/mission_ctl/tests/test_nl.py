@@ -353,6 +353,9 @@ ANSWERS = {
     "walk forward 3.05 m.": {"steps": [{"op": "walk", "direction": "forward",
                                         "distance_m": 3.05}]},
     "strafe left 2 m.": {"steps": [{"op": "walk", "direction": "left", "distance_m": 2}]},
+    # V3 fork: the shipped envelope is v2, where strafing executes; this one is refused
+    "back up 2 m at 0.8 m/s.": {"steps": [{"op": "walk", "direction": "backward",
+                                           "distance_m": 2, "speed_mps": 0.8}]},
 }
 SEEN = []
 
@@ -483,7 +486,7 @@ check("the reply is the template, with its labels", "robot:" in out and "by my I
 rec = json.loads(open(log).read().splitlines()[-1])
 check("the log has the model's raw answer and the reply", rec["understood"]["raw"]
       and rec["reply"].endswith("Done.") and rec["exit"] == 0, rec.keys())
-code, out = cli(["ask", "strafe left 2 meters.", "--dry-run", "--llm-url", URL,
+code, out = cli(["ask", "back up 2 m at 0.8 m/s.", "--dry-run", "--llm-url", URL,
                  "--model", "m", "--log", log])
 check("a refused instruction exits 2 and moves nothing",
       code == 2 and "nothing was executed" in out and "plan (" not in out, out)
@@ -538,7 +541,8 @@ import run_nl_eval as E   # noqa: E402
 env = N.resolve_envelope()
 for name in ("nl_dev.jsonl", "nl_test.jsonl", "nl_test2.jsonl", "nl_test3.jsonl"):
     path = os.path.join(os.path.dirname(HERE), "eval", name)
-    bad = E.check_cases(E.load_cases(path), env, LIM)
+    # V3 fork: each set is judged against the envelope it was written for
+    bad = E.check_cases(E.load_cases(path), E.set_envelope(name[3:-6], env), LIM)
     check("{} is consistent".format(name), not bad, bad)
 
 srv.shutdown()

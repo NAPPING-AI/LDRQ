@@ -58,7 +58,12 @@ SETS = {"dev": HERE / "nl_dev.jsonl", "test": HERE / "nl_test.jsonl",
 # A config with the camera off (release v2.0.0 ships without the perception node) skips
 # them in --check rather than calling every case inconsistent.
 SET_NEEDS_PERCEPTION = ("devobj", "test4")
+_V1 = ((0.0, 1.0), (0.0, 0.0), (-0.5, 0.5))
 SET_ENVELOPE = {"test5": ((-0.6, 1.0), (-0.5, 0.5), (-1.57, 1.57), "v2 (nl_test5.jsonl)")}
+# V3 fork: the shipped envelope is v2's, so the sets written and frozen against v1
+# (stage C and E) carry v1's here; their scores stay comparable with the earlier runs.
+SET_ENVELOPE.update({name: _V1 + ("v1 (nl_{}.jsonl, frozen)".format(name),)
+                     for name in ("dev", "test", "test2", "test3", "devobj", "test4")})
 # heldout stays the stage C 80, so its numbers stay comparable; stageE adds the objects.
 GROUPS = {"heldout": ("test", "test2", "test3"),
           "stageE": ("test", "test2", "test3", "test4"),

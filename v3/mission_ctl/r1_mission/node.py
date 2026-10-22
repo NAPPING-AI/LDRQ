@@ -72,7 +72,8 @@ def resolve_envelope(explicit=None):
         cand = (pathlib.Path(root) / "ros2_ws/src/r1_hw_bridge/config/bridge.yaml")
         if cand.is_file():
             return P.Envelope.from_bridge_yaml(cand)
-    repo = HERE.parents[1] / "deploy/ros2_ws/src/r1_hw_bridge/config/bridge.yaml"
+    # V3 fork: the bridge config is the V3 bridge's own (v3/ros2_ws/...)
+    repo = HERE.parents[1] / "ros2_ws/src/r1_hw_bridge/config/bridge.yaml"
     if repo.is_file():
         return P.Envelope.from_bridge_yaml(repo)
     raise P.PlanError(
@@ -605,7 +606,7 @@ def confirm(skip=False):
 # ------------------------------------------------------------------------ ask
 DEFAULT_LLM_URL = "http://127.0.0.1:11434"
 DEFAULT_LLM_MODEL = "qwen3:1.7b"
-LLM_CTL = HERE.parents[1] / "llm" / "ollama_ctl.sh"
+LLM_CTL = HERE.parents[2] / "llm" / "ollama_ctl.sh"  # V3 fork: llm/ is shared, at the repo root
 LLM_HINT = ("  Is the model server up?  bash {0} status\n"
             "  A known llama-server fault on the Orin NX leaves it running but not\n"
             "  answering; restarting it clears that:  bash {0} restart".format(LLM_CTL))

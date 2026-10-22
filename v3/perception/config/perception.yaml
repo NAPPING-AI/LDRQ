@@ -77,6 +77,10 @@ corridor_min_height_m: 0.10               # above the floor: the floor is never 
 corridor_max_height_m: 1.9
 corridor_step: 4
 corridor_min_points: 30
+# V3 proximity (/r1_perception/proximity): obstacle_m is the corridor_min_points-th nearest
+# corridor return; center_valid is the depth return fraction over this part of the image
+# (x0,y0,x1,y1 as fractions), where something pressed against the camera shows as a hole
+proximity_center_region: 0.25,0.25,0.75,1.0
 
 # ---- scheduling ----------------------------------------------------------------------
 # Run on every Nth /r1_policy_node/action, i.e. right after a policy inference: the GPU

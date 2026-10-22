@@ -15,6 +15,9 @@ it with nothing but `json`:
              "hits": 4, "confirmed": true}],       consecutive frames (tracker.py)
    "guard": {"person_near": false, "person_m": null, "obstacle": false,
              "obstacle_m": 3.2 | null, "depth_ok": true},
+   "proximity": {"v": 1, "person_m": .. | null, "person_near_box": false, "persons": 0,
+                 "obstacle_m": .. | null, "corridor_points": 812, "depth_valid": 0.93,
+                 "center_valid": 0.97, "depth_ok": true},          V3, see proximity()
    "timing": {"rect_ms": .., "pre_ms": .., "infer_ms": .., "post_ms": ..}}
 
 `dets` holds everything at or above the SAFETY threshold, confirmed or not; the
@@ -34,6 +37,40 @@ from . import tracker as T
 from . import yolox as Y
 
 MSG_VERSION = 1
+
+# V3: /r1_perception/proximity, std_msgs/Float64MultiArray, one per processed frame, published
+# before the JSON message. Float64 because t_cap is CLOCK_MONOTONIC seconds: a float32 of a
+# day's uptime resolves only ~8 ms. NaN = no reading. The bridge (C++, reflex_fsm.hpp) reads
+# it by these indices; v3/reflex/test_layout.py checks the two agree.
+PROX_VERSION = 1
+PROX_LAYOUT = ("version", "seq", "t_cap_mono", "t_pub_mono", "person_m", "person_near_box",
+               "persons", "obstacle_m", "corridor_points", "depth_valid", "center_valid",
+               "depth_ok")
+
+
+def proximity_array(prox, seq, t_cap_mono, t_pub_mono):
+    """The proximity facts (Pipeline.proximity) as the Float64MultiArray's data."""
+    vals = dict(prox, version=float(PROX_VERSION), seq=seq, t_cap_mono=t_cap_mono,
+                t_pub_mono=t_pub_mono)
+    out = []
+    for k in PROX_LAYOUT:
+        v = vals[k]
+        out.append(float("nan") if v is None else float(v))
+    return out
+
+
+def parse_proximity(data):
+    """Float64MultiArray data -> dict (None for NaN), or ValueError on a wrong layout."""
+    if len(data) != len(PROX_LAYOUT) or int(data[0]) != PROX_VERSION:
+        raise ValueError("proximity: {} values, version {}; expected {} values, version {}".format(
+            len(data), data[0] if data else None, len(PROX_LAYOUT), PROX_VERSION))
+    out = {}
+    for k, v in zip(PROX_LAYOUT, data):
+        v = float(v)
+        out[k] = None if v != v else v
+    for k in ("person_near_box", "depth_ok"):
+        out[k] = bool(out[k])
+    return out
 
 
 def read_flat_yaml(path):
@@ -120,7 +157,7 @@ class Pipeline(object):
                         "range_m": None if rng is None else round(rng, 3)})
         return out
 
-    def guard(self, entries, depth):
+    def guard(self, entries, depth, corr=None):
         """Per-frame safety facts for the mission layer: a person inside person_stop_m
         (from depth, or -- with no depth for that box -- a box taller than
         person_box_frac of the image, which at this field of view is a person about an
@@ -139,16 +176,60 @@ class Pipeline(object):
         g = {"person_near": bool(near), "person_m": None if person_m is None else round(person_m, 3),
              "obstacle": False, "obstacle_m": None, "depth_ok": depth is not None}
         if depth is not None:
-            obs, nearest, _ = D.corridor(
-                depth, self.rect, self.mount, float(self.cfg.get("obstacle_stop_m", 0.6)),
-                float(self.cfg.get("corridor_half_width_m", 0.35)),
-                float(self.cfg.get("corridor_min_height_m", 0.10)),
-                float(self.cfg.get("corridor_max_height_m", 1.9)),
-                int(self.cfg.get("corridor_step", 4)),
-                int(self.cfg.get("corridor_min_points", 30)))
-            g["obstacle"] = bool(obs)
-            g["obstacle_m"] = None if nearest is None else round(nearest, 3)
+            fwd, _ = corr if corr is not None else self.corridor(depth)
+            near = int((fwd < float(self.cfg.get("obstacle_stop_m", 0.6))).sum())
+            g["obstacle"] = near >= int(self.cfg.get("corridor_min_points", 30))
+            g["obstacle_m"] = round(float(np.percentile(fwd, 5)), 3) if fwd.size else None
         return g
+
+    def corridor(self, depth):
+        """(forward distances of the corridor's returns, valid fraction): computed once
+        per frame, for the guard and for the proximity facts."""
+        return D.corridor_points(
+            depth, self.rect, self.mount, float(self.cfg.get("corridor_half_width_m", 0.35)),
+            float(self.cfg.get("corridor_min_height_m", 0.10)),
+            float(self.cfg.get("corridor_max_height_m", 1.9)),
+            int(self.cfg.get("corridor_step", 4)))
+
+    def proximity(self, entries, depth, corr=None):
+        """V3: the distances the bridge's reflex acts on, from this frame alone. Plain
+        distances, not yes/no at a fixed threshold: the bridge's stop distance grows with
+        speed (v3/reflex/stop_distance.py), so the comparison is made there.
+
+        person_m         nearest person (safety threshold) with a depth range; any
+                         bearing -- too close is too close, in the path or not
+        person_near_box  a person with no depth whose box is taller than person_box_frac
+                         of the image: near, distance unknown
+        obstacle_m       the corridor_min_points-th nearest return in the walking
+                         corridor (depth.kth_nearest), any class or none
+        depth_valid      fraction of the image with a depth return
+        center_valid     the same over the image's center (proximity_center_region):
+                         stereo depth has a minimum range, and something pressed
+                         against the camera is a hole there, not a near distance"""
+        frac = float(self.cfg.get("person_box_frac", 0.8))
+        person_m, near_box, persons = None, False, 0
+        for e in entries:
+            if e["cls_id"] != Y.PERSON or e["conf"] < self.safety_conf:
+                continue
+            persons += 1
+            if e["range_m"] is not None:
+                person_m = e["range_m"] if person_m is None else min(person_m, e["range_m"])
+            elif (e["bbox"][3] - e["bbox"][1]) >= frac * self.rect.h:
+                near_box = True
+        p = {"v": PROX_VERSION, "person_m": person_m, "person_near_box": near_box,
+             "persons": persons, "obstacle_m": None, "corridor_points": 0,
+             "depth_valid": 0.0, "center_valid": 0.0, "depth_ok": depth is not None}
+        if depth is not None:
+            fwd, valid = corr if corr is not None else self.corridor(depth)
+            k = D.kth_nearest(fwd, int(self.cfg.get("corridor_min_points", 30)))
+            p["obstacle_m"] = None if k is None else round(k, 3)
+            p["corridor_points"] = int(fwd.size)
+            p["depth_valid"] = round(valid, 3)
+            region = self.cfg.get("proximity_center_region", "0.25,0.25,0.75,1.0")
+            region = tuple(float(x) for x in str(region).split(","))
+            p["center_valid"] = round(D.valid_fraction(depth, region,
+                                                       int(self.cfg.get("corridor_step", 4))), 3)
+        return p
 
     # ------------------------------------------------------------------- all
     def process(self, bgr, depth=None, t_cap=None):
@@ -176,13 +257,16 @@ class Pipeline(object):
         entries = self.describe(dets, rdepth)
         for e, tr in zip(entries, self.tracker.update(dets)):
             e.update(tr)
-        g = self.guard(entries, rdepth)
+        corr = self.corridor(rdepth) if rdepth is not None else None
+        g = self.guard(entries, rdepth, corr)
+        prox = self.proximity(entries, rdepth, corr)
         timing["rect_ms"], timing["pre_ms"] = prep["rect_ms"], prep["pre_ms"]
         self.seq += 1
         msg = {"v": MSG_VERSION, "seq": self.seq,
                "t_cap": float(t_cap if t_cap is not None else time.time()),
                "img": [self.rect.w, self.rect.h], "hfov_deg": self.rect.hfov_deg,
                "engine": getattr(self.rt, "name", "?"), "dets": entries, "guard": g,
+               "proximity": prox,
                "timing": {k: round(v, 3) for k, v in timing.items()}}
         self.last_rect = rect
         return msg, rect, rdepth

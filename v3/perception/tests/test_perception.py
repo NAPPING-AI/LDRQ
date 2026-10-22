@@ -200,6 +200,88 @@ check("prepare is CPU only (the node runs it a step early); finish = process",
       n_after_prepare == 0 and len(calls) == 1 and msg4["t_cap"] == 124.0
       and msg4["dets"][0]["cls"] == d0["cls"] and set(msg4["timing"]) == set(msg["timing"]), (n_after_prepare, len(calls)))
 
+print("== V3 proximity ==")
+
+
+def wall_at(dist_m, base=floor):
+    """The floor scene with a wall `dist_m` ahead, everywhere above the floor."""
+    out = base.copy()
+    wz = dist_m / np.maximum(1e-9, fx)
+    hit = (fx > 0) & (wz < np.where(base > 0, base, np.inf))
+    out[hit] = wz[hit]
+    return out
+
+
+for dist in (0.4, 0.6, 1.0):
+    fwd, valid = D.corridor_points(wall_at(dist), rect, mount)
+    k = D.kth_nearest(fwd, 30)
+    check("wall {:.1f} m ahead: obstacle_m {:.1f} m".format(dist, dist),
+          k is not None and abs(k - dist) < 0.03, (k, fwd.size))
+fwd, valid = D.corridor_points(floor, rect, mount)
+check("bare floor: no corridor points, no obstacle_m, depth valid below the horizon",
+      fwd.size == 0 and D.kth_nearest(fwd, 30) is None and 0.3 < valid < 1.0, (fwd.size, valid))
+far = wall_at(2.0)
+speck = far.copy()
+speck[236:240, 316:320] = 0.3                      # 16 pixels -> 1 sampled point at 0.3 m
+fwd, _ = D.corridor_points(speck, rect, mount)
+check("a speck nearer than k points does not make an obstacle_m: the wall behind it does",
+      abs(D.kth_nearest(fwd, 30) - 2.0) < 0.03, D.kth_nearest(fwd, 30))
+small = far.copy()
+small[224:240, 304:336] = 0.5                     # 4 x 8 = 32 sampled points, 0.5 m depth
+fwd, _ = D.corridor_points(small, rect, mount)
+_, pct5, _ = D.corridor(small, rect, mount, 0.6)
+check("a 32-point object in front of a 2 m wall: obstacle_m is the object (k = 30), "
+      "where the 5th percentile of the corridor reads the wall",
+      D.kth_nearest(fwd, 30) < 0.6 and pct5 > 1.5, (D.kth_nearest(fwd, 30), pct5, fwd.size))
+check("guard's corridor() is unchanged by the refactor: wall 0.5 m -> obstacle at 0.5",
+      D.corridor(wall_at(0.5), rect, mount, 0.6)[0]
+      and abs(D.corridor(wall_at(0.5), rect, mount, 0.6)[1] - 0.5) < 0.05)
+hole = far.copy()
+hole[120:480, 160:480] = 0.0                       # too near for stereo: no return
+check("center_valid sees a hole in the middle that depth_valid dilutes",
+      D.valid_fraction(hole, (0.25, 0.25, 0.75, 1.0)) < 0.05 < 0.5 < D.valid_fraction(hole),
+      (D.valid_fraction(hole, (0.25, 0.25, 0.75, 1.0)), D.valid_fraction(hole)))
+check("no returns at all: valid fraction 0", D.valid_fraction(empty) == 0.0)
+
+m5, _, _ = pipe.process(np.zeros((480, 640, 3), np.uint8), np.full((480, 640), 0.55, np.float32))
+pr = m5["proximity"]
+check("proximity: the person's range, one person, a flat 0.55 m depth is an obstacle at 0.55",
+      pr["person_m"] == m5["dets"][0]["range_m"] and pr["persons"] == 1
+      and abs(pr["obstacle_m"] - 0.55) < 0.03 and pr["depth_ok"] and pr["v"] == PL.PROX_VERSION, pr)
+m6, _, _ = pipe.process(np.zeros((480, 640, 3), np.uint8), None)
+check("proximity without depth: no distances, depth_ok false, the person still counted",
+      m6["proximity"]["person_m"] is None and m6["proximity"]["obstacle_m"] is None
+      and not m6["proximity"]["depth_ok"] and m6["proximity"]["persons"] == 1, m6["proximity"])
+check("a 234 px person box (of 480) is not near at person_box_frac 0.8",
+      not m6["proximity"]["person_near_box"])
+tall = PL.Pipeline(dict(cfg, person_box_frac=0.45), FakeRT())   # the box is 234 px, clipped
+m7, _, _ = tall.process(np.zeros((480, 640, 3), np.uint8), None)
+check("...and is at person_box_frac 0.45: near, distance unknown",
+      m7["proximity"]["person_near_box"] and m7["proximity"]["person_m"] is None, m7["proximity"])
+arr = PL.proximity_array(m6["proximity"], 9, 100.25, 100.5)
+check("proximity array: the layout's length, version first, NaN for no reading",
+      len(arr) == len(PL.PROX_LAYOUT) and arr[0] == PL.PROX_VERSION
+      and math.isnan(arr[PL.PROX_LAYOUT.index("obstacle_m")]), arr)
+back = PL.parse_proximity(arr)
+check("proximity array round trip", back["seq"] == 9 and back["t_cap_mono"] == 100.25
+      and back["person_m"] is None and back["depth_ok"] is False and back["persons"] == 1, back)
+arr5 = PL.proximity_array(pr, 10, 1.0, 2.0)
+check("...with readings", abs(PL.parse_proximity(arr5)["obstacle_m"] - pr["obstacle_m"]) < 1e-12)
+try:
+    PL.parse_proximity([2.0] + arr[1:])
+    check("a wrong version is refused", False)
+except ValueError:
+    check("a wrong version is refused", True)
+try:
+    PL.parse_proximity(arr[:-1])
+    check("a short array is refused", False)
+except ValueError:
+    check("a short array is refused", True)
+cfg_file = PL.read_flat_yaml(ROOT / "config" / "perception.yaml")
+check("the shipped config's center region parses",
+      tuple(float(x) for x in str(cfg_file["proximity_center_region"]).split(",")) == (0.25, 0.25, 0.75, 1.0),
+      cfg_file.get("proximity_center_region"))
+
 print("== stereo source (fake decoder, fake depth device) ==")
 import os  # noqa: E402
 import tempfile  # noqa: E402

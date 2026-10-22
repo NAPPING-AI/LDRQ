@@ -13,6 +13,8 @@ message arrives for a second (no stack, the dev box), a timer takes over at the 
 rate and the stats line says so.
 
 Topics (all under /r1_perception):
+  ~/proximity         std_msgs/Float64MultiArray (V3, pipeline.PROX_LAYOUT), one per
+                      processed frame, published first: what the bridge's reflex reads
   ~/detections        std_msgs/String, JSON (pipeline.py), one per processed frame
   ~/snapshot_request  std_msgs/String, JSON {"path": ..., "highlight": <det id>}
   ~/snapshot_done     std_msgs/String, JSON {"path": ..., "ok": bool, "error": ...}
@@ -45,7 +47,7 @@ def run(cfg, engine_path, stats_period_s=5.0):
     import rclpy
     from rclpy.node import Node
     from rclpy.qos import QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
-    from std_msgs.msg import Float32MultiArray, String
+    from std_msgs.msg import Float32MultiArray, Float64MultiArray, String
 
     rt = RT.make(engine_path)
     pipe = PL.Pipeline(cfg, rt)
@@ -56,6 +58,11 @@ def run(cfg, engine_path, stats_period_s=5.0):
         def __init__(self):
             Node.__init__(self, "r1_perception")
             self.src = SRC.make(cfg, self)
+            # RELIABLE, newest only: a BEST_EFFORT subscriber (the bridge) can read a RELIABLE
+            # publisher, not the other way round. Freshness is the bridge's check, on t_cap.
+            self.prox_pub = self.create_publisher(
+                Float64MultiArray, "~/proximity",
+                QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE))
             self.pub = self.create_publisher(
                 String, "~/detections", QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE))
             self.snap_pub = self.create_publisher(
@@ -105,6 +112,13 @@ def run(cfg, engine_path, stats_period_s=5.0):
             msg, _, _ = pipe.finish(self.prep)
             self.prep = None
             self.last_msg = msg
+            # t_cap is time.time() at arrival (sources.py); the bridge works in
+            # CLOCK_MONOTONIC (steady_clock), so convert with the offset of this instant
+            now_mono = time.monotonic()
+            prox = Float64MultiArray()
+            prox.data = PL.proximity_array(msg["proximity"], msg["seq"],
+                                           now_mono - (time.time() - msg["t_cap"]), now_mono)
+            self.prox_pub.publish(prox)
             out = String()
             out.data = json.dumps(msg, separators=(",", ":"))
             self.pub.publish(out)

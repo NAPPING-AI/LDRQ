@@ -43,7 +43,7 @@ python3 r1_mission_cli.py run "turn_to the sofa" --dry-run --world tests/worlds/
 
 Everything with `--dry-run`, plus `capability` and the tests, runs on any machine with
 Python 3.8+ and no ROS: the executor drives a simulated bridge and prints the command
-trace. A live run needs rclpy and the stack from [`../deploy/`](../deploy/).
+trace. A live run needs rclpy and the stack from [`../deploy/`](../../deploy/).
 
 ### Before using it on the robot
 
@@ -123,7 +123,7 @@ is the default). In English: "Face the bottle", "Walk to the woman by the window
   (`"appear_t": 4.0`), which is how the tests walk a person into the robot's path.
 
 **The model transcribes and the robot judges** (`r1_mission/nl.py`; results and method
-in [docs/stageC_nl_eval.md](../docs/stageC_nl_eval.md)):
+in [docs/stageC_nl_eval.md](../../docs/stageC_nl_eval.md)):
 
 1. `normalize()` turns number words and units into digits in m, seconds, degrees, m/s
    and rad/s before the model sees anything. It also gives a plain "turn left" its 90°
@@ -314,7 +314,7 @@ exposed two more:**
 - **While walking:** untethered, vx 0.1 with a 0.15 rad/s turn command did not turn in 80 s
   (the 60 s untethered run that met gate PG-2). The simulator follows the same command at 1.03.
 - **On the spot:** measured with `deploy/tools/probe_cpp/turn_response.py`, gantry attached but slack, at
-  kp 1.0, 1.2 and 1.3 ([docs/stageB_turn_response.md](../docs/stageB_turn_response.md)).
+  kp 1.0, 1.2 and 1.3 ([docs/stageB_turn_response.md](../../docs/stageB_turn_response.md)).
   Every rate from 0.15 to 0.5 turns at about 0.8 of the command. 6 of 24 segments had a
   sudden lurch (at least some were the slack rope pulling once the robot had moved off the
   gantry point), and the tool flags those and leaves them out.
@@ -333,18 +333,18 @@ What follows from this:
 
 Built as stage B (the time / angle / speed core, accepted on the robot 2026-09-30) and
 stage C (`ask`, 2026-09-30) of the project; stages are explained in
-[docs/project_history.md](../docs/project_history.md).
+[docs/project_history.md](../../docs/project_history.md).
 
 - **Core:** drove all recordings of the `kp_scale` sweep; 10 closed-loop turns and the
   demo sequence all `DONE`, within 1.6° by the IMU; the four abort paths (Ctrl-C,
   `kill -9`, bridge DEGRADED, no stack) all stop the robot
-  ([docs/stageB_mission_runs.md](../docs/stageB_mission_runs.md)).
+  ([docs/stageB_mission_runs.md](../../docs/stageB_mission_runs.md)).
 - **`ask`:** the held-out English sets scored the same on the Orin as on the dev box
   (77/80), and 11 instructions ran end to end, each executed or refused as asked
-  ([docs/stageC_nl_eval.md](../docs/stageC_nl_eval.md)).
+  ([docs/stageC_nl_eval.md](../../docs/stageC_nl_eval.md)).
 - **`turn_to` / `walk_to` (stage E, 2026-10-14):** written and tested on the dev box,
   against a simulated room and against the real perception node on a replayed image; the
   English prompt with the two new steps was re-evaluated with the model on the CPU. Not yet
-  run on the robot ([docs/stageE_perception.md](../docs/stageE_perception.md)).
+  run on the robot ([docs/stageE_perception.md](../../docs/stageE_perception.md)).
 - Tests: all three suites pass on Python 3.8 (the robot's) and 3.10; CI runs them on every
   push (`../run_tests.sh`).

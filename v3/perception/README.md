@@ -8,7 +8,7 @@
 
 It runs YOLOX-Nano (COCO, Apache-2.0) through TensorRT on the robot's Orin NX at about 12.5 Hz. It is used only by `mission_ctl`'s `turn_to` and `walk_to`, and never enters the 50 Hz control loop.
 
-Status and results: [docs/stageE_perception.md](../docs/stageE_perception.md).
+Status and results: [docs/stageE_perception.md](../../docs/stageE_perception.md).
 
 > **The camera is the head's stereo module.** Unitree's R1 "video stream service" page
 > describes it: the left camera's RGB (544×448) arrives as RTP/H264 on UDP port 5002,
@@ -108,4 +108,4 @@ Written in stage E (2026-10-14), on the dev box. It ran end to end there under R
 - a replay source as the camera;
 - `mission_ctl` grounding `turn_to` live, with the snapshot.
 
-On the robot, nothing has run yet: [docs/stageE_perception.md](../docs/stageE_perception.md) lists what is measured and what is pending.
+On the robot, nothing has run yet: [docs/stageE_perception.md](../../docs/stageE_perception.md) lists what is measured and what is pending.

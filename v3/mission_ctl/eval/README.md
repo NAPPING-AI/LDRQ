@@ -2,7 +2,7 @@
 
 `run_nl_eval.py` sends every case through exactly what `r1_mission_cli.py ask` runs
 (normalize → model → translate → `plan_from_json`), and scores **what the robot would
-do**. Results, method and the model choice: [docs/stageC_nl_eval.md](../../docs/stageC_nl_eval.md).
+do**. Results, method and the model choice: [docs/stageC_nl_eval.md](../../../docs/stageC_nl_eval.md).
 
 | file | cases | role |
 |---|---|---|

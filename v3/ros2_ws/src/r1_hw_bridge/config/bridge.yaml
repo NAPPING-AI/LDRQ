@@ -1,0 +1,36 @@
+# Bridge defaults. Gains are the ones to argue about before the first hanging
+# run; everything else is protocol.
+/**:
+  ros__parameters:
+    iface: "eth10"           # measured in stage 2; `ip -brief addr` to confirm
+    dds_domain: 0
+    control_rate_hz: 50.0    # must equal the policy's; it is what training used
+    cmd_rate_hz: 500.0       # motor bus rate; the PD loop itself is in firmware
+    enable_output: false     # SAFETY: opt in, never default
+    check_state_crc: true
+    # Gains are per joint, from the training config (see kKp/kKd in
+    # joint_map.hpp, generated from interface/actuator_gains.json). These only
+    # scale them, and 1.0 IS the trained controller -- ramp with kp_scale so the
+    # endpoint of the ramp is a known quantity instead of a guessed number.
+    kp_scale: 1.0
+    kd_scale: 1.0            # also the damping used in the degraded state
+    lowstate_timeout_ms: 100.0
+    target_timeout_ms: 60.0  # 3 control cycles at 50 Hz
+    min_control_rate_hz: 45.0
+    auto_recover: false      # recovery is explicit, via ~/resume
+    # Velocity commands arrive on ~/cmd_vel as [vx, vy, wz] and go STRAIGHT into
+    # the velocity_commands observation term. Nothing downstream checks them: the
+    # policy cannot signal "I was not trained for this", it just emits confident
+    # joint targets for a state it has never seen.
+    cmd_vel_timeout_ms: 500.0   # deadman: stale commands decay to zero, not hold
+    # The envelope below is what training actually covered -- the end point of
+    # W04's command curriculum (COMMAND_RANGES_FINAL, tasks/r1_flat/flat_env_cfg.py).
+    # It is not a comfort limit.
+    #   vx  forward only, up to 1.0 m/s. Reverse was never trained.
+    #   vy  pinned to 0 for ALL of training. Sideways is not weakly trained, it
+    #       does not exist in the distribution -- so it is refused, not clamped.
+    #   wz  turning both ways, +-0.5 rad/s.
+    # Widen only for a deliberate out-of-distribution experiment.
+    cmd_vel_x_range: [0.0, 1.0]
+    cmd_vel_y_range: [0.0, 0.0]
+    cmd_vel_yaw_range: [-0.5, 0.5]

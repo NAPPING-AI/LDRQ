@@ -1,0 +1,108 @@
+# Mission-layer settings. Flat key: value on purpose -- parsed by a ten-line
+# reader so the robot needs no yaml package.
+#
+# The command ENVELOPE is deliberately not here. It is read from the installed
+# bundle's command_envelope.json, or failing that from the bridge's own
+# bridge.yaml, so there is exactly one place that says what training covered.
+
+# Default speeds when a command does not name one.
+cruise_vx: 0.4           # m/s, inside the trained [0, 1.0]
+cruise_wz: 0.4           # rad/s, inside the trained [-0.5, 0.5]
+# Backward and sideways walks: only with a policy trained for them (v2, envelope
+# vx >= -0.6, |vy| <= 0.5); with v1 installed they are refused whatever these say.
+# Speeds are magnitudes. Kept low for the first real runs: v2 has not walked
+# backward or sideways on the robot yet, and the camera only looks forward.
+cruise_back_vx: 0.3
+cruise_vy: 0.2
+
+# Ground speed, the only thing that turns a distance into a time: there is no
+# base linear velocity in the 425-dim observation and no odometry topic.
+#
+#   v_cal: commanded      -> ground speed ASSUMED equal to the command. "walk 10m@0.5"
+#                            becomes 20 s, reported as "~10 m if speed = command;
+#                            not measured" -- no error bar, because none was measured
+#   v_cal: 0.35           -> MEASURED at cruise_vx (tape + stopwatch, vcal.py);
+#                            "walk 10m" becomes 28.6 s, reported as 10 +- 1.5 m
+#   v_cal: unmeasured     -> distance commands are REFUSED, durations still work
+#
+# commanded since 2026-09-28: there is no venue for the speed test, and the task
+# needs distance only at the level of "a few meters". Replace with a number if a
+# measurement is ever made; nothing else changes.
+v_cal: commanded
+v_cal_rel_err: 0.15      # used only with a measured v_cal
+
+# Ramp between primitives. Training resampled the velocity command every 10 s as
+# a step, so steps are in distribution; a 0.5 s ramp costs nothing and keeps the
+# first control cycles of each primitive out of the sharpest transient.
+ramp_s: 0.5
+
+# Floor on primitive length, same reason: chains of very short primitives are a
+# transient the policy saw rarely.
+min_primitive_s: 2.0
+
+# Budgets. A plan that exceeds any of these is refused whole, never truncated.
+max_total_s: 120.0
+max_total_m: 30.0
+max_prims: 20
+
+# Closed-loop turning, from the IMU quaternion on ~/imu.
+yaw_tol_deg: 3.0         # acceptance band; the controller aims AT the target
+turn_timeout_factor: 2.0 # abort a turn that takes this multiple of its estimate
+# Smallest |wz| the real robot turns at, from deploy/tools/probe_cpp/turn_response.py.
+# Near its target the turn tapers its rate; this keeps the taper at or above it, and a
+# closed-loop turn asked for below it is refused. A RATE in rad/s, not a gain: above the
+# trained |wz| (0.5) compile_plan rejects the config.
+# Measured 2026-09-29, on the spot, gantry attached but slack, kp 1.0/1.2/1.3: every rate tested,
+# 0.15-0.5, turns at ~0.8 of the command once lurches are left out
+# (docs/stageB_turn_response.md). 0.15 is the lowest rate tested, so the edge is at or
+# below it. (Turning WHILE WALKING is different: on the PG-2 run 0.15 was lost.)
+turn_min_wz: 0.15
+settle_s: 1.0            # hold zero this long before declaring the plan done
+
+# ---- stage C: the English front end (r1_mission_cli.py ask) ----
+# The model server. Robot-local by default. A machine on the robot's own network
+# works too (the plan 3.6 fallback if the coexistence test fails), e.g.
+# llm_url: http://192.168.123.10:11434
+llm_url: http://127.0.0.1:11434
+# Chosen by the offline eval (docs/stageC_nl_eval.md): best on the held-out sets
+# and the fewest answers that would move the robot differently from what was asked.
+# qwen3:0.6b is the small fallback if the Orin needs one.
+llm_model: qwen3:1.7b
+llm_backend: ollama
+llm_timeout_s: 120
+# Where the model runs. -1 = Ollama decides (every layer on the GPU if it fits);
+# 0 = CPU only. Set this from llm/coexist.py on the robot, not from the dev box.
+# Robot, 2026-09-30: on the GPU the policy's inference p99 rose to 5.0 ms and the
+# setpoint lag p95 to 5.1 ms. That misses plan 3.6's targets (2 ms, idle + 1 ms) and
+# keeps every limit of the control loop; nothing misbehaved. 4 CPU threads met both
+# (542 us, 0.9 ms) at 21 tok/s. Decision (user, 2026-09-30): stay on the GPU.
+# Decision (user, 2026-10-14, stage E): the CPU, 4 threads -- the GPU is the walking
+# policy's and the detector's. Every request carries these options (llm_options()).
+llm_num_gpu: 0
+llm_num_thread: 4        # CPU threads when on the CPU; 0 = Ollama's default (every core)
+
+# ---- stage E: turn_to / walk_to (docs/stageE_perception.md) ----
+# The camera node is perception/ (its own perception.yaml decides what is published
+# and the per-frame safety facts); these decide what the mission ACTS on.
+perception: on           # off: turn_to / walk_to are refused
+perception_guard: object # object: camera-guard the walks inside turn_to / walk_to
+                         # all: every walk needs fresh frames, stops for people/obstacles
+                         # off: no camera guard on plain walks (object steps keep theirs)
+obj_target_conf: 0.5     # PROBE: from tools/eval_detect.py on robot images
+obj_confirm_frames: 3    # consecutive frames that must agree before a target counts
+obj_gate_deg: 20         # the same target between looks: within this of where expected
+obj_look_timeout_s: 3.0
+obj_settle_s: 1.0        # stand this long after stopping before frames count
+obj_stale_s: 0.5         # a camera-guarded walk stops if the newest frame is older
+obj_turn_tol_deg: 5      # turn_to: facing within this is done
+obj_max_corrections: 2
+obj_align_tol_deg: 8     # walk_to: turn first when the target is further off than this
+obj_segment_m: 1.0       # walk_to: longest walk between two measurements
+obj_vx: 0.3
+obj_stop_default_m: 1.0  # walk_to when no distance was said (shown in the plan)
+obj_stop_min_m: 0.8      # above perception.yaml obstacle_stop_m (0.6)
+obj_max_range_m: 5.0     # PROBE: how far the depth camera is trusted
+obj_max_segments: 10
+obj_person_stop_m: 1.2   # = perception.yaml person_stop_m
+obj_snapshot_dir: ~/r1_snapshots
+obj_snapshot_http_port: 0  # = perception.yaml snapshot_http_port, only for the hint printed

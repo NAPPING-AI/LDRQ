@@ -1,0 +1,6 @@
+# Downloaded (fetch_yolox.sh) or built on the robot; only their checksums are tracked.
+*.onnx
+*.plan
+*.bin
+*.jpg
+*.npy

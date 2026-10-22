@@ -1,0 +1,8 @@
+{"id": "DO1", "cat": "execute", "text": "Turn around to face the dog.", "expect": [[{"op": "turn_to", "object": "the dog"}]], "outcome": "execute"}
+{"id": "DO2", "cat": "execute", "text": "Walk to the suitcase and stop 1.2 meters from it.", "expect": [[{"op": "walk_to", "object": "the suitcase", "stop_at_m": 1.2}]], "outcome": "execute"}
+{"id": "DO3", "cat": "execute", "text": "Head over to the bench.", "expect": [[{"op": "walk_to", "object": "the bench"}]], "outcome": "execute"}
+{"id": "DO4", "cat": "execute", "text": "Wait 3 seconds and then face the clock.", "expect": [[{"op": "stand", "duration_s": 3}, {"op": "turn_to", "object": "the clock"}]], "outcome": "execute"}
+{"id": "DO5", "cat": "refuse", "text": "Walk to the window.", "expect": [[{"op": "walk_to", "object": "the window"}]], "outcome": "refuse"}
+{"id": "DO6", "cat": "refuse", "text": "Turn left 90 degrees and walk to the bike.", "expect": [[{"op": "turn", "direction": "left", "angle_deg": 90}, {"op": "walk_to", "object": "the bike"}]], "outcome": "refuse"}
+{"id": "DO7", "cat": "refuse", "text": "Walk to the cat and stop 0.3 meters away.", "expect": [[{"op": "walk_to", "object": "the cat", "stop_at_m": 0.3}]], "outcome": "refuse"}
+{"id": "DO8", "cat": "refuse", "text": "Bring me the bottle.", "expect": [[{"op": "unsupported", "what": "bring me the bottle"}]], "outcome": "refuse"}

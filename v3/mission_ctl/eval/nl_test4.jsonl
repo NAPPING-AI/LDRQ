@@ -1,0 +1,20 @@
+{"id": "E01", "cat": "execute", "text": "Turn to face the chair.", "expect": [[{"op": "turn_to", "object": "the chair"}]], "outcome": "execute"}
+{"id": "E02", "cat": "execute", "text": "Walk to the sofa.", "expect": [[{"op": "walk_to", "object": "the sofa"}]], "outcome": "execute"}
+{"id": "E03", "cat": "execute", "text": "Go to the person and stop 2 meters away from them.", "expect": [[{"op": "walk_to", "object": "the person", "stop_at_m": 2}]], "outcome": "execute"}
+{"id": "E04", "cat": "execute", "text": "Walk over to the plant, stopping 1 meter before it.", "expect": [[{"op": "walk_to", "object": "the plant", "stop_at_m": 1}]], "outcome": "execute"}
+{"id": "E05", "cat": "execute", "text": "Face the television, then wait 3 seconds.", "expect": [[{"op": "turn_to", "object": "the television"}, {"op": "stand", "duration_s": 3}]], "outcome": "execute"}
+{"id": "E06", "cat": "execute", "text": "Walk up to the bottle and then turn left 90 degrees.", "expect": [[{"op": "walk_to", "object": "the bottle"}, {"op": "turn", "direction": "left", "angle_deg": 90}]], "outcome": "execute"}
+{"id": "E07", "cat": "execute", "text": "Approach the man in the blue shirt until you are 1.5 meters from him.", "expect": [[{"op": "walk_to", "object": "the man in the blue shirt", "stop_at_m": 1.5}]], "outcome": "execute"}
+{"id": "E08", "cat": "execute", "text": "Turn towards the backpack.", "expect": [[{"op": "turn_to", "object": "the backpack"}]], "outcome": "execute"}
+{"id": "E09", "cat": "execute", "text": "Stand for 2 seconds, then walk to the table.", "expect": [[{"op": "stand", "duration_s": 2}, {"op": "walk_to", "object": "the table"}]], "outcome": "execute"}
+{"id": "E10", "cat": "execute", "text": "Look at the laptop.", "expect": [[{"op": "turn_to", "object": "the laptop"}]], "outcome": "execute"}
+{"id": "E11", "cat": "execute", "text": "Go to the mug and stop 1 meter away.", "expect": [[{"op": "walk_to", "object": "the mug", "stop_at_m": 1}]], "outcome": "execute"}
+{"id": "E12", "cat": "refuse", "text": "Walk to the fridge and stop half a meter away.", "expect": [[{"op": "walk_to", "object": "the fridge", "stop_at_m": 0.5}]], "outcome": "refuse", "why": "0.5 m is inside the 0.8 m floor (the camera's obstacle stop)"}
+{"id": "E13", "cat": "refuse", "text": "Walk to the door.", "expect": [[{"op": "walk_to", "object": "the door"}]], "outcome": "refuse", "why": "no COCO class"}
+{"id": "E14", "cat": "refuse", "text": "Go to the kitchen.", "expect": [[{"op": "unsupported", "what": "go to the kitchen"}], [{"op": "walk_to", "object": "the kitchen"}]], "outcome": "refuse", "why": "a place: unsupported, or an object that does not resolve"}
+{"id": "E15", "cat": "refuse", "text": "Walk forward 2 meters and then go to the chair.", "expect": [[{"op": "walk", "direction": "forward", "distance_m": 2}, {"op": "walk_to", "object": "the chair"}]], "outcome": "refuse", "why": "the target would not be the one confirmed on the picture"}
+{"id": "E16", "cat": "refuse", "text": "Turn to the chair and then walk to the sofa.", "expect": [[{"op": "turn_to", "object": "the chair"}, {"op": "walk_to", "object": "the sofa"}]], "outcome": "refuse", "why": "one object per instruction"}
+{"id": "E17", "cat": "refuse", "text": "Walk to the person and stop 1 meter from them.", "expect": [[{"op": "walk_to", "object": "the person", "stop_at_m": 1}]], "outcome": "refuse", "why": "inside the 1.4 m person floor"}
+{"id": "E18", "cat": "refuse", "text": "Follow the woman.", "expect": [[{"op": "unsupported", "what": "follow the woman"}]], "outcome": "refuse"}
+{"id": "E19", "cat": "refuse", "text": "Walk to the red chair and pick up the cup.", "expect": [[{"op": "walk_to", "object": "the red chair"}, {"op": "unsupported", "what": "pick up the cup"}]], "outcome": "refuse"}
+{"id": "E20", "cat": "refuse", "text": "Turn to face whoever is talking.", "expect": [[{"op": "turn_to", "object": "whoever is talking"}], [{"op": "unsupported", "what": "turn to face whoever is talking"}]], "outcome": "refuse", "why": "not a thing a detector can pick out"}

@@ -1,0 +1,8 @@
+{
+  "objects": [
+    {"cls": "chair", "x": 3.0, "y": 1.0, "conf": 0.88},
+    {"cls": "potted plant", "x": 2.5, "y": -2.0, "conf": 0.72},
+    {"cls": "tv", "x": 4.0, "y": -0.5, "conf": 0.35}
+  ],
+  "hfov_deg": 100.0
+}

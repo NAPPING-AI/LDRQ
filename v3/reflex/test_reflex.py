@@ -75,6 +75,91 @@ check("case names are unique", len(set(names)) == len(names))
 check("golden.csv is what reflex.py produces now (cases.py --write to regenerate)",
       CS.GOLDEN.read_text() == CS.golden_text())
 
+print("== the conductor: two policies, the dance, the reflex (dance_cases.py) ==")
+import conductor as CD  # noqa: E402
+import dance_cases as DC  # noqa: E402
+
+for case in DC.CASES:
+    bad = DC.check_case(case)
+    check(case.name, not bad, "; ".join(bad))
+check("golden_dance.csv is what conductor.py produces now (dance_cases.py --write)",
+      DC.GOLDEN.read_text() == DC.golden_text())
+cd = CD.Conductor()
+check("the dance's bars are routine.py's: 3 + 3 + 2 + 2 s at 50 Hz, boundaries 0/150/300/400",
+      cd.loop == 500 and cd.boundaries == (0, 150, 300, 400))
+check("dance trigger 0.9 m, start clear 1.0 m (user, 2026-10-23)",
+      CD.DANCE_DEFAULTS["dance_person_trigger_m"] == 0.9 and CD.DANCE_DEFAULTS["dance_clear_m"] == 1.0)
+inv = []
+for case in DC.CASES:
+    rows = DC.run_case(case)
+    prev = None
+    for r in rows:
+        out = r[-1]
+        if (out.policy == CD.WALK) != (out.dance_tick == -1):
+            inv.append("{} t={:.2f}: policy {} with tick {}".format(case.name, r[1], out.policy, out.dance_tick))
+        if out.policy == CD.DANCE and out.reflex.cmd() != (0.0, 0.0, 0.0):
+            inv.append("{} t={:.2f}: dancing, but the walking policy is commanded {}".format(
+                case.name, r[1], out.reflex.cmd()))
+        if prev is not None and prev.policy == CD.DANCE and out.policy == CD.DANCE \
+                and out.dance_tick != prev.dance_tick + 1:
+            inv.append("{} t={:.2f}: dance tick jumped {} -> {}".format(case.name, r[1], prev.dance_tick, out.dance_tick))
+        if prev is not None and prev.policy == CD.DANCE and out.policy == CD.WALK \
+                and out.dance_reason == CD.D_DONE and out.reflex.state == RX.ARMED \
+                and not cd.at_boundary(prev.dance_tick + 1):
+            inv.append("{} t={:.2f}: a normal end off a bar boundary".format(case.name, r[1]))
+        prev = out
+check("every step: walking <=> no dance tick; dancing => v2 gets (0,0,0); the tick counts "
+      "by one; a normal end only on a bar boundary", not inv, inv[:3])
+routine_dir = HERE.parent / "dance"
+if (routine_dir / "routine.py").exists():
+    sys.path.insert(0, str(routine_dir))
+    try:
+        import routine as RT  # noqa: E402
+        check("conductor's bar ticks are routine.py's BARS",
+              tuple(int(round(b[1] * 50)) for b in RT.BARS) == CD.DANCE_DEFAULTS["dance_bar_ticks"])
+    except ImportError as exc:   # numpy missing
+        print("  skip  routine import: {}".format(exc))
+
+print("== the bridge (C++) and its config agree with the reference ==")
+import re  # noqa: E402
+
+# v3/ros2_ws/... in the repo, deploy/ros2_ws/... in an installed tree
+BRIDGE = next(d for d in (HERE.parent / "ros2_ws" / "src" / "r1_hw_bridge",
+                          HERE.parent / "deploy" / "ros2_ws" / "src" / "r1_hw_bridge") if d.is_dir())
+hpp = (BRIDGE / "include" / "r1_hw_bridge" / "reflex_fsm.hpp").read_text()
+idx = {m.group(1): int(m.group(2)) for m in re.finditer(r"\bkProx(\w+?)(?:Idx)? = (\d+)[,;]", hpp)}
+
+
+def camel(name):
+    return "".join(w.capitalize() for w in name.split("_"))
+
+
+try:
+    from r1_perception import pipeline as PL0
+    layout = PL0.PROX_LAYOUT
+except ImportError:
+    layout = None
+if layout is not None:
+    want = {camel(k).replace("Mono", ""): i for i, k in enumerate(layout)}
+    got = {k: v for k, v in idx.items() if k != "Len"}
+    check("reflex_fsm.hpp's proximity indices are perception's PROX_LAYOUT",
+          got == want and idx.get("Len") == len(layout), (got, want))
+bv = [float(x) for x in re.search(r"kBrakeV\[\] = \{([^}]*)\}", hpp).group(1).split(",")]
+bd = [float(x) for x in re.search(r"kBrakeD\[\] = \{([^}]*)\}", hpp).group(1).split(",")]
+check("reflex_fsm.hpp's braking table is stop_distance.py's",
+      list(zip(bv, bd)) == list(SD.BRAKE_WORST), list(zip(bv, bd)))
+yaml = {}
+for line in (BRIDGE / "config" / "bridge.yaml").read_text().splitlines():
+    m = re.match(r"\s+reflex_(\w+):\s*([^#]+)", line)
+    if m:
+        yaml[m.group(1)] = m.group(2).strip().strip('"')
+cfg_keys = set(RX.DEFAULTS) - {"enable"}
+check("bridge.yaml has every reflex parameter, and the reflex off",
+      cfg_keys <= set(yaml) and yaml.get("enable") == "false", sorted(cfg_keys - set(yaml)))
+bad = {k: (yaml.get(k), RX.DEFAULTS[k]) for k in cfg_keys if k in yaml
+       and float(yaml[k]) != float(RX.DEFAULTS[k])}
+check("bridge.yaml's reflex values are reflex.py's defaults", not bad, bad)
+
 print("== perception's message -> the reflex's frame ==")
 try:
     from r1_perception import pipeline as PL

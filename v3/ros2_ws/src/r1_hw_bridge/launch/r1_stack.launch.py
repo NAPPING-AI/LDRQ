@@ -45,6 +45,16 @@ def generate_launch_description():
         # bridge.yaml, and a fault injection you forget to revert is worse than
         # one you cannot run.
         DeclareLaunchArgument("min_control_rate_hz", default_value="45.0"),
+        # V3: the proximity reflex, off unless asked for (it needs r1_perception
+        # running: without its frames forward walking is blocked). reflex_log: a
+        # path for one CSV line per control step.
+        DeclareLaunchArgument("reflex_enable", default_value="false"),
+        DeclareLaunchArgument("reflex_log", default_value=""),
+        # V3 dance: the second policy. Off unless asked for, and only with the reflex.
+        # dance_engine: the dance policy's .plan; dance_reference: its dance_ref.bin.
+        DeclareLaunchArgument("dance_enable", default_value="false"),
+        DeclareLaunchArgument("dance_engine", default_value=""),
+        DeclareLaunchArgument("dance_reference", default_value=""),
     ]
 
     bridge = Node(
@@ -56,10 +66,15 @@ def generate_launch_description():
             "kp_scale": LaunchConfiguration("kp_scale"),
             "kd_scale": LaunchConfiguration("kd_scale"),
             "min_control_rate_hz": LaunchConfiguration("min_control_rate_hz"),
+            "reflex_enable": LaunchConfiguration("reflex_enable"),
+            "reflex_log": LaunchConfiguration("reflex_log"),
+            "dance_enable": LaunchConfiguration("dance_enable"),
         }],
         remappings=[
             ("joint_target", "/r1_policy_node/joint_target"),
             ("action", "/r1_policy_node/action"),
+            ("dance_joint_target", "/r1_policy_node/dance_joint_target"),
+            ("dance_action", "/r1_policy_node/dance_action"),
         ],
     )
 
@@ -68,6 +83,8 @@ def generate_launch_description():
         output="screen", emulate_tty=True,
         parameters=[policy_params, {
             "engine_path": LaunchConfiguration("engine"),
+            "dance_engine_path": LaunchConfiguration("dance_engine"),
+            "dance_reference_path": LaunchConfiguration("dance_reference"),
             "mode": "subscribe",
         }],
         remappings=[

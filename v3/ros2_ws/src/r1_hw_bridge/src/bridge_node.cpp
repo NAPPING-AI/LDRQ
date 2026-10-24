@@ -24,14 +24,33 @@
 // SAFETY: `enable_output` defaults to FALSE. Nothing is written to rt/lowcmd
 // until it is explicitly turned on, so building and running this node cannot
 // move the robot by accident.
+//
+// V3: the proximity reflex (reflex_fsm.hpp, `reflex_enable`, default FALSE). Once
+// per control step it sits between ~/cmd_vel and the observation's velocity
+// command: forward is blocked inside a speed-dependent stop distance, a person or
+// obstacle too close starts a short retreat, and then the robot stands until
+// ~/reflex_reset. It reads /r1_perception/proximity. With it disabled none of
+// its topics exist and the observation is built exactly as before.
+//
+// V3 dance (`dance_enable`, default FALSE; needs the reflex): two policies run in the
+// runner (its fork in v3/ros2_ws) -- v2 and the dance policy -- and this node chooses
+// which reaches the motors, through the conductor (conductor.hpp, the reference is
+// v3/reflex/conductor.py): ~/dance (Bool, from mission_ctl: true = dance and heartbeat,
+// false = end) starts and ends a dance; the reflex ends it at once and v2 steps back.
+// The observation then carries 6 more floats for the runner (IMU quaternion w x y z,
+// dance tick, policy), and its last-action slot is the action that was applied, from
+// whichever policy that was.
 
 #include "r1_hw_bridge/joint_map.hpp"
+#include "r1_hw_bridge/conductor.hpp"
+#include "r1_hw_bridge/reflex_fsm.hpp"
 #include "r1_hw_bridge/robot_io.hpp"
 
 #include <rclcpp/rclcpp.hpp>
 #include <std_msgs/msg/bool.hpp>
 #include <std_msgs/msg/empty.hpp>
 #include <std_msgs/msg/float32_multi_array.hpp>
+#include <std_msgs/msg/float64_multi_array.hpp>
 #include <std_msgs/msg/string.hpp>
 
 #include <algorithm>
@@ -40,8 +59,11 @@
 #include <cstdlib>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
+#include <fstream>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -144,6 +166,7 @@ public:
       "cmd_vel envelope (as trained): vx [%.2f, %.2f]  vy [%.2f, %.2f]  wz [%.2f, %.2f]",
       cmd_vel_x_range_[0], cmd_vel_x_range_[1], cmd_vel_y_range_[0],
       cmd_vel_y_range_[1], cmd_vel_yaw_range_[0], cmd_vel_yaw_range_[1]);
+    DeclareReflex();
 
     const auto qos = rclcpp::QoS(rclcpp::KeepLast(1)).best_effort();
     obs_pub_ = create_publisher<std_msgs::msg::Float32MultiArray>("~/obs", qos);
@@ -172,10 +195,49 @@ public:
     resume_sub_ = create_subscription<std_msgs::msg::Bool>(
       "~/resume", rclcpp::QoS(rclcpp::KeepLast(1)).reliable(),
       [this](std_msgs::msg::Bool::ConstSharedPtr m) {OnResume(*m);});
+    if (HaveReflex()) {
+      // BEST_EFFORT reads perception's RELIABLE publisher; freshness is judged on
+      // the frame's capture time, not on delivery.
+      prox_sub_ = create_subscription<std_msgs::msg::Float64MultiArray>(
+        reflex_topic_, rclcpp::QoS(rclcpp::KeepLast(1)).best_effort(),
+        [this](std_msgs::msg::Float64MultiArray::ConstSharedPtr m) {OnProximity(*m);});
+      reflex_reset_sub_ = create_subscription<std_msgs::msg::Empty>(
+        "~/reflex_reset", rclcpp::QoS(rclcpp::KeepLast(5)).reliable(),
+        [this](std_msgs::msg::Empty::ConstSharedPtr) {
+          std::lock_guard<std::mutex> lock(reflex_mutex_);
+          reflex_reset_pending_ = true;
+        });
+      // RELIABLE and a little history: mission_ctl must not miss the one message
+      // that says a retreat started.
+      reflex_pub_ = create_publisher<std_msgs::msg::String>(
+        "~/reflex", rclcpp::QoS(rclcpp::KeepLast(20)).reliable());
+    }
+    if (conductor_) {
+      dance_sub_ = create_subscription<std_msgs::msg::Bool>(
+        "~/dance", rclcpp::QoS(rclcpp::KeepLast(5)).reliable(),
+        [this](std_msgs::msg::Bool::ConstSharedPtr m) {
+          std::lock_guard<std::mutex> lock(reflex_mutex_);
+          // an end request is never overwritten by a heartbeat in the same step
+          if (!m->data) {dance_pending_ = reflex::DanceMsg::End;}
+          else if (dance_pending_ != reflex::DanceMsg::End) {dance_pending_ = reflex::DanceMsg::Dance;}
+        });
+      dance_target_sub_ = create_subscription<std_msgs::msg::Float32MultiArray>(
+        "dance_joint_target", qos,
+        [this](std_msgs::msg::Float32MultiArray::ConstSharedPtr m) {OnDanceTarget(*m);});
+      dance_action_sub_ = create_subscription<std_msgs::msg::Float32MultiArray>(
+        "dance_action", qos,
+        [this](std_msgs::msg::Float32MultiArray::ConstSharedPtr m) {
+          if (m->data.size() != kNumActions) {return;}
+          std::lock_guard<std::mutex> lock(target_mutex_);
+          std::copy(m->data.begin(), m->data.end(), dance_last_action_.begin());
+        });
+    }
 
     frame_.assign(kFrameDim, 0.0f);
     last_action_.assign(kNumActions, 0.0f);
     target_.assign(kNumActions, 0.0f);
+    dance_last_action_.assign(kNumActions, 0.0f);
+    dance_target_.assign(kNumActions, 0.0f);
     cmd_vel_ = {0.0f, 0.0f, 0.0f};
 
     io_ = std::make_unique<RobotIo>(io_cfg);
@@ -438,14 +500,19 @@ private:
     for (int i = 0; i < 3; ++i) {frame_[k++] = grav[i];}
     {
       // A teleop that dies must not leave the robot walking on its last command.
-      std::lock_guard<std::mutex> lock(target_mutex_);
-      const bool cmd_fresh = have_cmdvel_ &&
-        duration<double, std::milli>(now - last_cmdvel_time_).count() < cmd_vel_timeout_ms_;
-      if (!cmd_fresh && have_cmdvel_) {
-        RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
-          "~/cmd_vel stale -- commanding zero velocity");
+      std::array<float, 3> cmd{};
+      {
+        std::lock_guard<std::mutex> lock(target_mutex_);
+        const bool cmd_fresh = have_cmdvel_ &&
+          duration<double, std::milli>(now - last_cmdvel_time_).count() < cmd_vel_timeout_ms_;
+        if (!cmd_fresh && have_cmdvel_) {
+          RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
+            "~/cmd_vel stale -- commanding zero velocity");
+        }
+        for (int i = 0; i < 3; ++i) {cmd[i] = cmd_fresh ? cmd_vel_[i] : 0.0f;}
       }
-      for (int i = 0; i < 3; ++i) {frame_[k++] = cmd_fresh ? cmd_vel_[i] : 0.0f;}
+      if (HaveReflex()) {ApplyReflex(now, cmd);}
+      for (int i = 0; i < 3; ++i) {frame_[k++] = cmd[i];}
     }
     // joint_pos is RELATIVE to the default pose; joint_vel is absolute. Getting
     // this backwards produces a plausible-looking observation and a policy that
@@ -459,11 +526,21 @@ private:
       frame_[k++] = s.motor[kJointSlot[j]].dq;
     }
     {
+      // The action applied over the last control step: from the policy that was
+      // driving then (V3: v2's, or the dance's).
       std::lock_guard<std::mutex> lock(target_mutex_);
-      for (std::size_t a = 0; a < kNumActions; ++a) {frame_[k++] = last_action_[a];}
+      const auto & applied = applied_policy_ == reflex::Policy::Dance ? dance_last_action_ : last_action_;
+      for (std::size_t a = 0; a < kNumActions; ++a) {frame_[k++] = applied[a];}
     }
+    applied_policy_ = policy_.load();
 
     obs_msg_.data.assign(frame_.begin(), frame_.end());
+    if (conductor_) {
+      // V3: what the runner needs for the dance policy (dance_obs.hpp)
+      for (int i = 0; i < 4; ++i) {obs_msg_.data.push_back(s.imu.quat[i]);}
+      obs_msg_.data.push_back(static_cast<float>(dance_tick_));
+      obs_msg_.data.push_back(policy_.load() == reflex::Policy::Dance ? 1.0f : 0.0f);
+    }
     obs_pub_->publish(obs_msg_);
     // Stamped so OnTarget can measure the loop lag this obs frame incurs. This
     // runs on the SDK's DDS thread while OnTarget runs on the ROS executor, so
@@ -583,6 +660,14 @@ private:
         target_fresh = have_target_ &&
           duration<double, std::milli>(now - last_target_time_).count() < target_timeout_ms_;
         target = target_;
+        // V3: the dance policy's target while it drives. Its freshness is the
+        // conductor's business (it hands back to v2 within a control step); this
+        // only refuses a target older than v2's own limit.
+        if (policy_.load() == reflex::Policy::Dance && have_dance_target_ &&
+          duration<double, std::milli>(now - last_dance_target_time_).count() < target_timeout_ms_)
+        {
+          target = dance_target_;
+        }
       }
 
       if (state_.load() == State::WaitingPolicy && target_fresh) {
@@ -690,6 +775,7 @@ private:
     // deployed loop is outside the distribution the policy was trained on, and
     // that is a W07 gap-mitigation input, not a crash -- so say it, once every
     // status cycle, rather than degrading on it.
+    if (HaveReflex()) {LogReflexStats();}
     if (lag[1] > step_ms) {
       RCLCPP_WARN(get_logger(),
         "setpoint lag p95=%.1f ms exceeds the trained range (0-%.0f ms = 0-1 "
@@ -697,6 +783,296 @@ private:
         "distribution", lag[1], step_ms);
     }
   }
+
+  // ------------------------------------------------------------------ reflex
+  void DeclareReflex()
+  {
+    const reflex::Config d;
+    reflex::Config c;
+    c.enable = declare_parameter<bool>("reflex_enable", false);
+    c.person_trigger_m = declare_parameter<double>("reflex_person_trigger_m", d.person_trigger_m);
+    c.obstacle_trigger_m =
+      declare_parameter<double>("reflex_obstacle_trigger_m", d.obstacle_trigger_m);
+    c.clear_margin_m = declare_parameter<double>("reflex_clear_margin_m", d.clear_margin_m);
+    c.confirm_frames = static_cast<int>(
+      declare_parameter<int64_t>("reflex_confirm_frames", d.confirm_frames));
+    c.retreat_vx = declare_parameter<double>("reflex_retreat_vx", d.retreat_vx);
+    c.retreat_s = declare_parameter<double>("reflex_retreat_s", d.retreat_s);
+    c.max_retreats = static_cast<int>(
+      declare_parameter<int64_t>("reflex_max_retreats", d.max_retreats));
+    c.window_s = declare_parameter<double>("reflex_window_s", d.window_s);
+    c.stale_s = declare_parameter<double>("reflex_stale_s", d.stale_s);
+    c.center_valid_min = declare_parameter<double>("reflex_center_valid_min", d.center_valid_min);
+    c.release_margin_m = declare_parameter<double>("reflex_release_margin_m", d.release_margin_m);
+    c.person_floor_m = declare_parameter<double>("reflex_person_floor_m", d.person_floor_m);
+    c.obstacle_floor_m = declare_parameter<double>("reflex_obstacle_floor_m", d.obstacle_floor_m);
+    c.stop_margin_m = declare_parameter<double>("reflex_stop_margin_m", d.stop_margin_m);
+    c.latency_s = declare_parameter<double>("reflex_latency_s", d.latency_s);
+    c.k_lat = declare_parameter<double>("reflex_k_lat", d.k_lat);
+    c.k_brake = declare_parameter<double>("reflex_k_brake", d.k_brake);
+    c.speed_window_s = declare_parameter<double>("reflex_speed_window_s", d.speed_window_s);
+    reflex_topic_ = declare_parameter<std::string>("reflex_proximity_topic", "/r1_perception/proximity");
+    const auto log_path = declare_parameter<std::string>("reflex_log", "");
+    const reflex::DanceConfig dd;
+    reflex::DanceConfig dc;
+    const bool dance = declare_parameter<bool>("dance_enable", false);
+    dc.person_trigger_m = declare_parameter<double>("dance_person_trigger_m", dd.person_trigger_m);
+    dc.obstacle_trigger_m = declare_parameter<double>("dance_obstacle_trigger_m", dd.obstacle_trigger_m);
+    dc.clear_m = declare_parameter<double>("dance_clear_m", dd.clear_m);
+    dc.still_s = declare_parameter<double>("dance_still_s", dd.still_s);
+    dc.heartbeat_s = declare_parameter<double>("dance_heartbeat_s", dd.heartbeat_s);
+    dc.max_s = declare_parameter<double>("dance_max_s", dd.max_s);
+    dance_target_stale_s_ = declare_parameter<double>("dance_target_stale_s", 0.06);
+    if (!c.enable) {
+      if (dance) {
+        throw std::invalid_argument(
+          "dance_enable needs reflex_enable: a dancing robot must step back from people");
+      }
+      RCLCPP_INFO(get_logger(), "reflex_enable=false -- no proximity reflex");
+      return;
+    }
+    // The retreat is a command like any other: it has to be inside what the policy
+    // was trained on. Under v1's envelope (forward only) there is no retreat.
+    if (!(c.retreat_vx < 0.0) || c.retreat_vx < cmd_vel_x_range_[0]) {
+      throw std::invalid_argument(
+        "reflex_retreat_vx must be negative and inside cmd_vel_x_range (the policy's trained "
+        "range); a policy that was never trained to walk backward cannot retreat");
+    }
+    if (dance) {
+      conductor_.emplace(c, dc);
+    } else {
+      reflex_.emplace(c);
+    }
+    if (!log_path.empty()) {
+      reflex_log_.open(log_path, std::ios::out | std::ios::trunc);
+      if (!reflex_log_) {throw std::runtime_error("cannot write reflex_log " + log_path);}
+      reflex_log_ << "t,state,reason,blocked,refused,cmd_vx,cmd_vy,cmd_wz,out_vx,out_vy,out_wz,"
+        "frame_seq,frame_t_cap,frame_age_s,person_m,person_near_box,obstacle_m,depth_ok,"
+        "center_valid,new_frame,reset" << (dance ? ",policy,dance_tick,dance_state,dance_reason,"
+        "dance_msg,dance_ok" : "") << "\n";
+    }
+    RCLCPP_WARN(get_logger(),
+      "reflex ON: retreat %.2f m/s for %.2f s when a person < %.2f m or an obstacle < %.2f m on "
+      "%d frames; stop distance person %.2f/%.2f/%.2f m, obstacle %.2f/%.2f/%.2f m at "
+      "0/0.3/1.0 m/s; frames from %s%s%s",
+      c.retreat_vx, c.retreat_s, c.person_trigger_m, c.obstacle_trigger_m, c.confirm_frames,
+      Rx().StopPerson(0.0), Rx().StopPerson(0.3), Rx().StopPerson(1.0),
+      Rx().StopObstacle(0.0), Rx().StopObstacle(0.3), Rx().StopObstacle(1.0),
+      reflex_topic_.c_str(), log_path.empty() ? "" : "; log ", log_path.c_str());
+    if (dance) {
+      RCLCPP_WARN(get_logger(),
+        "dance ON: two policies; a dance starts on ~/dance with nobody within %.2f m and the "
+        "robot standing %.1f s; dancing, a person or obstacle < %.2f / %.2f m steps back at "
+        "once; heartbeat %.2f s, at most %.0f s; the dance policy's output must be younger "
+        "than %.0f ms", dc.clear_m, dc.still_s, dc.person_trigger_m, dc.obstacle_trigger_m,
+        dc.heartbeat_s, dc.max_s, dance_target_stale_s_ * 1e3);
+    }
+  }
+
+  bool HaveReflex() const {return reflex_.has_value() || conductor_.has_value();}
+  // The reflex state machine: the conductor's own when dancing is on.
+  const reflex::Fsm & Rx() const {return conductor_ ? conductor_->reflex() : *reflex_;}
+
+  void OnDanceTarget(const std_msgs::msg::Float32MultiArray & m)
+  {
+    if (m.data.size() != kNumActions) {return;}
+    bool finite = true;
+    for (const float v : m.data) {finite = finite && std::isfinite(v);}
+    std::lock_guard<std::mutex> lock(target_mutex_);
+    if (!finite) {
+      // Not a reason to degrade the bridge: v2 is running and takes over (the
+      // conductor sees the dance's output as not ok).
+      dance_target_bad_ = true;
+      return;
+    }
+    std::copy(m.data.begin(), m.data.end(), dance_target_.begin());
+    last_dance_target_time_ = steady_clock::now();
+    have_dance_target_ = true;
+    dance_target_bad_ = false;
+  }
+
+  void OnProximity(const std_msgs::msg::Float64MultiArray & m)
+  {
+    const auto f = reflex::ParseProximity(m.data);
+    if (!f) {
+      RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 2000,
+        "%s: %zu values, version %.0f -- expected %zu, version %.0f; frame ignored "
+        "(perception and bridge from different V3 builds?)", reflex_topic_.c_str(),
+        m.data.size(), m.data.empty() ? -1.0 : m.data[0], reflex::kProxLen, reflex::kProxVersion);
+      return;
+    }
+    const double t = duration<double>(steady_clock::now().time_since_epoch()).count();
+    std::lock_guard<std::mutex> lock(reflex_mutex_);
+    reflex_frame_ = *f;
+    ++reflex_frames_;
+    reflex_ages_.push_back(t - f->t_cap);
+  }
+
+  // The reflex's step: `cmd` is what the observation would get; it is replaced by
+  // what the reflex allows. steady_clock is CLOCK_MONOTONIC, the clock perception
+  // stamps frames with (Python time.monotonic()).
+  void ApplyReflex(steady_clock::time_point now, std::array<float, 3> & cmd)
+  {
+    const double t = duration<double>(now.time_since_epoch()).count();
+    std::optional<reflex::Frame> frame;
+    bool reset = false;
+    reflex::DanceMsg dmsg = reflex::DanceMsg::None;
+    {
+      std::lock_guard<std::mutex> lock(reflex_mutex_);
+      frame.swap(reflex_frame_);
+      reset = reflex_reset_pending_;
+      reflex_reset_pending_ = false;
+      dmsg = dance_pending_;
+      dance_pending_ = reflex::DanceMsg::None;
+    }
+    const bool running = state_.load() == State::Running;
+    const auto before = Rx().state();
+    reflex::Output o;
+    bool dance_ok = false;
+    if (conductor_) {
+      {
+        std::lock_guard<std::mutex> lock(target_mutex_);
+        dance_ok = have_dance_target_ && !dance_target_bad_ &&
+          duration<double>(now - last_dance_target_time_).count() < dance_target_stale_s_;
+      }
+      const auto before_policy = conductor_->policy();
+      const auto co = conductor_->Step(t, cmd[0], cmd[1], cmd[2], frame ? &*frame : nullptr, reset,
+                                       running, dmsg, dance_ok);
+      o = co.reflex;
+      policy_.store(co.policy);
+      dance_tick_ = co.dance_tick;
+      if (co.policy != before_policy || co.dance_state != last_dance_.dance_state ||
+        co.dance_reason != last_dance_.dance_reason)
+      {
+        RCLCPP_WARN(get_logger(), "DANCE: policy %s -> %s, %s (%s)",
+                    reflex::PolicyName(before_policy), reflex::PolicyName(co.policy),
+                    reflex::DanceStateName(co.dance_state), reflex::DanceReasonText(co.dance_reason));
+      }
+      dance_changed_ = co.policy != last_dance_.policy || co.dance_state != last_dance_.dance_state ||
+        co.dance_reason != last_dance_.dance_reason;
+      last_dance_ = co;
+    } else {
+      o = reflex_->Step(t, cmd[0], cmd[1], cmd[2], frame ? &*frame : nullptr, reset, running);
+    }
+    const std::array<float, 3> in = cmd;
+    cmd = {static_cast<float>(o.vx), static_cast<float>(o.vy), static_cast<float>(o.wz)};
+
+    const auto & f = Rx().frame();
+    const double age = f ? t - f->t_cap : -1.0;
+    if (o.state == reflex::State::Retreat && before != reflex::State::Retreat) {
+      // The latency the stop distance assumes: from the frame's capture to the
+      // retreat command in the observation (this one).
+      RCLCPP_WARN(get_logger(),
+        "REFLEX: %s -- person %s, obstacle %s; frame %ld captured %.0f ms ago; retreat %zu in %.0f s",
+        reflex::ReasonText(o.reason), Fmt(f ? f->person_m : std::nullopt, f && f->person_near_box).c_str(),
+        Fmt(f && f->depth_ok ? f->obstacle_m : std::nullopt, false).c_str(),
+        f ? f->seq : -1L, age * 1e3, Rx().retreats().size(), Rx().config().window_s);
+      ++reflex_retreats_total_;
+    } else if (o.state != before || o.reset_refused) {
+      RCLCPP_INFO(get_logger(), "REFLEX: %s -> %s (%s)", reflex::StateName(before),
+                  reflex::StateName(o.state), reflex::ReasonText(o.reason));
+    }
+
+    const bool changed = o.state != last_out_.state || o.reason != last_out_.reason ||
+      o.blocked != last_out_.blocked || o.reset_refused || dance_changed_;
+    if (changed || t - reflex_pub_t_ >= 0.5) {
+      PublishReflex(t, o, in, age);
+      reflex_pub_t_ = t;
+    }
+    last_out_ = o;
+
+    if (reflex_log_.is_open()) {
+      char buf[512];
+      std::snprintf(buf, sizeof(buf),
+        "%.6f,%s,%d,%d,%d,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%ld,%.6f,%.4f,%s,%d,%s,%d,%.3f,%d,%d",
+        t, reflex::StateName(o.state), o.reason, o.blocked, o.reset_refused, in[0], in[1], in[2],
+        o.vx, o.vy, o.wz, f ? f->seq : -1L, f ? f->t_cap : 0.0, age,
+        Num(f ? f->person_m : std::nullopt).c_str(), f ? f->person_near_box : 0,
+        Num(f ? f->obstacle_m : std::nullopt).c_str(), f ? f->depth_ok : 0,
+        f ? f->center_valid : 0.0, frame ? 1 : 0, reset ? 1 : 0);
+      reflex_log_ << buf;
+      if (conductor_) {
+        std::snprintf(buf, sizeof(buf), ",%s,%ld,%s,%d,%d,%d",
+          reflex::PolicyName(last_dance_.policy), last_dance_.dance_tick,
+          reflex::DanceStateName(last_dance_.dance_state), last_dance_.dance_reason,
+          dmsg == reflex::DanceMsg::Dance ? 1 : (dmsg == reflex::DanceMsg::End ? 0 : -1),
+          dance_ok ? 1 : 0);
+        reflex_log_ << buf;
+      }
+      reflex_log_ << "\n";
+    }
+  }
+
+  // ~/reflex, std_msgs/String JSON: what mission_ctl acts on and reports.
+  void PublishReflex(double t, const reflex::Output & o, const std::array<float, 3> & in, double age)
+  {
+    const auto & f = Rx().frame();
+    const auto & d = last_dance_;
+    char buf[1000];
+    std::snprintf(buf, sizeof(buf),
+      "{\"v\":1,\"t\":%.6f,\"state\":\"%s\",\"reason\":%d,\"text\":\"%s\",\"blocked\":%s,"
+      "\"reset_refused\":%s,\"cmd_in\":[%.4f,%.4f,%.4f],\"cmd_out\":[%.4f,%.4f,%.4f],"
+      "\"frame_seq\":%ld,\"frame_age_s\":%.4f,\"person_m\":%s,\"person_near_box\":%s,"
+      "\"obstacle_m\":%s,\"depth_ok\":%s,\"retreats_in_window\":%zu,"
+      "\"policy\":\"%s\",\"dance_state\":\"%s\",\"dance_reason\":%d,\"dance_tick\":%ld,"
+      "\"dance_text\":\"%s\"}",
+      t, reflex::StateName(o.state), o.reason, reflex::ReasonText(o.reason),
+      o.blocked ? "true" : "false", o.reset_refused ? "true" : "false", in[0], in[1], in[2],
+      o.vx, o.vy, o.wz, f ? f->seq : -1L, age, Json(f ? f->person_m : std::nullopt).c_str(),
+      f && f->person_near_box ? "true" : "false", Json(f ? f->obstacle_m : std::nullopt).c_str(),
+      f && f->depth_ok ? "true" : "false", Rx().retreats().size(),
+      reflex::PolicyName(d.policy), reflex::DanceStateName(d.dance_state), d.dance_reason,
+      d.dance_tick, reflex::DanceReasonText(d.dance_reason));
+    std_msgs::msg::String m;
+    m.data = buf;
+    reflex_pub_->publish(m);
+  }
+
+  // Every 5 s with the status line: how fresh the frames are when they arrive.
+  void LogReflexStats()
+  {
+    std::vector<double> ages;
+    uint64_t frames;
+    {
+      std::lock_guard<std::mutex> lock(reflex_mutex_);
+      ages.swap(reflex_ages_);
+      frames = reflex_frames_;
+      reflex_frames_ = 0;
+    }
+    std::sort(ages.begin(), ages.end());
+    auto at = [&ages](double q) {
+        return ages.empty() ? 0.0 :
+               ages[std::min(ages.size() - 1, static_cast<std::size_t>(q * ages.size()))] * 1e3;
+      };
+    RCLCPP_INFO(get_logger(),
+      "REFLEX %s | frames %.1f Hz | age on arrival ms p50=%.0f p95=%.0f p99=%.0f max=%.0f | "
+      "retreats %lu",
+      reflex::StateName(Rx().state()), frames / 5.0, at(0.50), at(0.95), at(0.99),
+      ages.empty() ? 0.0 : ages.back() * 1e3, static_cast<unsigned long>(reflex_retreats_total_));
+    if (frames == 0) {
+      RCLCPP_WARN(get_logger(), "REFLEX: no frames on %s -- forward walking is blocked "
+                  "(is r1_perception running?)", reflex_topic_.c_str());
+    }
+  }
+
+  static std::string Fmt(const std::optional<double> & v, bool near_box)
+  {
+    if (near_box) {return "near (box)";}
+    if (!v) {return "none";}
+    char b[32];
+    std::snprintf(b, sizeof(b), "%.2f m", *v);
+    return b;
+  }
+
+  static std::string Num(const std::optional<double> & v)
+  {
+    if (!v) {return "nan";}
+    char b[32];
+    std::snprintf(b, sizeof(b), "%.4f", *v);
+    return b;
+  }
+
+  static std::string Json(const std::optional<double> & v) {return v ? Num(v) : "null";}
 
   void PublishStatus()
   {
@@ -763,6 +1139,37 @@ private:
     target_sub_, action_sub_, cmdvel_sub_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr resume_sub_;
   rclcpp::TimerBase::SharedPtr obs_timer_, status_timer_;
+
+  // reflex (V3); reflex_ is empty when reflex_enable is false
+  std::optional<reflex::Fsm> reflex_;
+  std::string reflex_topic_;
+  std::mutex reflex_mutex_;
+  std::optional<reflex::Frame> reflex_frame_;   // newest frame not yet stepped
+  bool reflex_reset_pending_ = false;
+  uint64_t reflex_frames_ = 0, reflex_retreats_total_ = 0;
+  std::vector<double> reflex_ages_;
+  reflex::Output last_out_;
+  double reflex_pub_t_ = 0.0;
+  std::ofstream reflex_log_;
+  rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr prox_sub_;
+  rclcpp::Subscription<std_msgs::msg::Empty>::SharedPtr reflex_reset_sub_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr reflex_pub_;
+
+  // V3 dance; conductor_ is empty when dance_enable is false (and then reflex_ is used)
+  std::optional<reflex::Conductor> conductor_;
+  std::atomic<reflex::Policy> policy_{reflex::Policy::Walk};
+  reflex::Policy applied_policy_ = reflex::Policy::Walk;   // obs thread only
+  long dance_tick_ = -1;                                   // obs thread only
+  reflex::DanceMsg dance_pending_ = reflex::DanceMsg::None;   // under reflex_mutex_
+  reflex::ConductorOutput last_dance_;
+  bool dance_changed_ = false;
+  double dance_target_stale_s_ = 0.06;
+  std::vector<float> dance_target_, dance_last_action_;     // under target_mutex_
+  bool have_dance_target_ = false, dance_target_bad_ = false;
+  steady_clock::time_point last_dance_target_time_;
+  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr dance_sub_;
+  rclcpp::Subscription<std_msgs::msg::Float32MultiArray>::SharedPtr dance_target_sub_,
+    dance_action_sub_;
 };
 
 }  // namespace r1_hw_bridge

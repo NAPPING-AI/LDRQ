@@ -30,7 +30,17 @@ find_package(Threads REQUIRED)
 # ---------------------------------------------------------------------------
 
 set(R1_SDK_PREFIX "/usr/local" CACHE PATH "unitree_sdk2 install prefix")
+# V3: a dev box has no SDK and no robot. ON builds test/fake_robot_io.cpp (a robot
+# standing still, a Send() that goes nowhere) instead, so the node itself runs
+# against real ROS topics. Never on the robot.
+option(R1_FAKE_ROBOT_IO "build against a fake robot (dev box only)" OFF)
 
+if(R1_FAKE_ROBOT_IO)
+  message(WARNING "R1_FAKE_ROBOT_IO=ON: this bridge talks to NO robot")
+  add_library(r1_robot_io STATIC test/fake_robot_io.cpp)
+  target_include_directories(r1_robot_io PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+  target_link_libraries(r1_robot_io PRIVATE Threads::Threads)
+else()
 # --- the SDK side: no ROS -----------------------------------------------
 add_library(r1_robot_io STATIC src/robot_io.cpp)
 target_include_directories(r1_robot_io PRIVATE
@@ -54,6 +64,7 @@ message(STATUS "r1_hw_bridge DDS: ${DDSCXX} / ${DDSC}")
 # include directories -- which is exactly the boundary we need.
 target_link_libraries(r1_robot_io PRIVATE
   ${UNITREE_SDK2} ${DDSCXX} ${DDSC} Threads::Threads)
+endif()
 
 # --- the ROS side: no SDK -----------------------------------------------
 add_executable(r1_hw_bridge_node src/bridge_node.cpp)
@@ -100,6 +111,20 @@ if(BUILD_TESTING)
     target_include_directories(test_joint_map PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
   else()
     message(WARNING "ament_cmake_gtest not found -- joint map tests SKIPPED")
+  endif()
+  # V3: the reflex against the reference's every tick (v3/reflex/golden.csv).
+  # Standard library only, so it needs no gtest.
+  # v3/reflex in the repo (three levels up), <tree>/reflex in an installed tree (four)
+  set(R1_REFLEX_GOLDEN "${CMAKE_CURRENT_SOURCE_DIR}/../../../reflex/golden.csv")
+  if(NOT EXISTS "${R1_REFLEX_GOLDEN}")
+    set(R1_REFLEX_GOLDEN "${CMAKE_CURRENT_SOURCE_DIR}/../../../../reflex/golden.csv")
+  endif()
+  if(EXISTS "${R1_REFLEX_GOLDEN}")
+    add_executable(test_reflex_fsm test/test_reflex_fsm.cpp)
+    target_include_directories(test_reflex_fsm PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+    add_test(NAME test_reflex_fsm COMMAND test_reflex_fsm "${R1_REFLEX_GOLDEN}")
+  else()
+    message(WARNING "${R1_REFLEX_GOLDEN} not found -- reflex golden test SKIPPED")
   endif()
 endif()
 

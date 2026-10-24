@@ -156,12 +156,15 @@ class Reflex(object):
         o = INF if (not f.depth_ok or f.obstacle_m is None) else float(f.obstacle_m)
         return p, o
 
-    def _near(self, f):
-        """'person' / 'obstacle' if this frame is inside a retreat trigger, else None."""
+    def _near(self, f, triggers=None):
+        """'person' / 'obstacle' if this frame is inside a retreat trigger, else None.
+        `triggers` (person m, obstacle m) replaces the configured ones for this frame:
+        the dance (conductor.py) triggers farther out, because the arms reach."""
         p, o = self._distances(f)
-        if p < self.cfg["person_trigger_m"]:
+        tp, to = triggers or (self.cfg["person_trigger_m"], self.cfg["obstacle_trigger_m"])
+        if p < tp:
             return "person"
-        if o < self.cfg["obstacle_trigger_m"]:
+        if o < to:
             return "obstacle"
         return None
 
@@ -218,9 +221,11 @@ class Reflex(object):
         self.retreat_reason = R_RETREAT_PERSON if kind == "person" else R_RETREAT_OBSTACLE
 
     # ------------------------------------------------------------------- step
-    def step(self, t, cmd, frame=None, reset=False, running=True):
+    def step(self, t, cmd, frame=None, reset=False, running=True, triggers=None):
         """One control step at time t (s, CLOCK_MONOTONIC). `cmd` is (vx, vy, wz) as the
-        bridge would otherwise write it; `frame` a new proximity Frame or None."""
+        bridge would otherwise write it; `frame` a new proximity Frame or None;
+        `triggers` (person m, obstacle m) overrides the retreat triggers for a frame that
+        arrives on this tick (None: the configured ones)."""
         c = self.cfg
         cmd = tuple(float(x) for x in cmd)
         if not c["enable"] or not running:
@@ -233,7 +238,7 @@ class Reflex(object):
         if frame is not None and frame.seq != self.last_seq:
             self.frame, self.last_seq = frame, frame.seq
             fresh_frame = t - frame.t_cap <= c["stale_s"]
-            kind = self._near(frame) if fresh_frame else None
+            kind = self._near(frame, triggers) if fresh_frame else None
             # consecutive near frames, person or obstacle alike; the latest names the cause
             if kind is not None:
                 self.near_count, self.near_kind = self.near_count + 1, kind

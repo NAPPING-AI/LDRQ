@@ -38,3 +38,37 @@
     cmd_vel_x_range: [-0.6, 1.0]
     cmd_vel_y_range: [-0.5, 0.5]
     cmd_vel_yaw_range: [-1.57, 1.57]
+
+    # ---- V3 proximity reflex (reflex_fsm.hpp; v3/README.md) --------------------------
+    # SAFETY: opt in. Off, none of its topics exist and the observation is built as
+    # before. On, it needs /r1_perception/proximity: without frames, forward walking
+    # is blocked. Every value below is also the default of reflex::Config and of
+    # v3/reflex/reflex.py (v3/reflex/test_reflex.py checks the three agree).
+    reflex_enable: false
+    reflex_proximity_topic: "/r1_perception/proximity"
+    reflex_log: ""                    # a path: one CSV line per control step
+    # retreat: on confirm_frames consecutive frames with a person or an obstacle nearer
+    # than its trigger, (retreat_vx, 0, 0) for retreat_s, then stand until ~/reflex_reset
+    reflex_person_trigger_m: 0.6
+    reflex_obstacle_trigger_m: 0.45
+    reflex_confirm_frames: 2
+    reflex_retreat_vx: -0.3          # inside cmd_vel_x_range, or the node refuses to start
+    reflex_retreat_s: 1.5            # 0.33 m from standing in simulation
+    reflex_clear_margin_m: 0.2       # in STAND: away beyond trigger + this before another
+    reflex_max_retreats: 2           # per window; then stand, latched until a reset
+    reflex_window_s: 10.0
+    # forward blocked: stale frames, no depth, a hole in the depth image's center, or
+    # anything inside the stop distance
+    #   stop(v) = max(floor, trigger + stop_margin + k_lat * v * latency + k_brake * brake(v))
+    # with brake(v) the v2 policy's worst simulated braking distance and v the largest
+    # forward command of the last speed_window_s
+    reflex_stale_s: 0.3
+    reflex_center_valid_min: 0.2     # PROBE: on the robot, with something against the camera
+    reflex_release_margin_m: 0.10
+    reflex_person_floor_m: 1.2
+    reflex_obstacle_floor_m: 0.6
+    reflex_stop_margin_m: 0.10
+    reflex_latency_s: 0.25           # PROBE: replace with the measured p99 (the bridge logs it)
+    reflex_k_lat: 1.5
+    reflex_k_brake: 1.3
+    reflex_speed_window_s: 1.0

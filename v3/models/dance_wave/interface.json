@@ -1,0 +1,142 @@
+{
+ "what": "V3 dance policy (BeyondMimic motion tracking, without state estimation)",
+ "task": "Isaac-Dance-R1-v3",
+ "checkpoint": "logs/rsl_rl/r1_dance_v3/2026-10-23_16-51-44_wave/model_5999.pt",
+ "exported": "2026-10-23T20:37:48+1100",
+ "control": {
+  "sim_dt": 0.005,
+  "decimation": 4,
+  "control_dt": 0.02
+ },
+ "observation": {
+  "dim": 137,
+  "history_length": 1,
+  "terms": [
+   {
+    "name": "command",
+    "width": 52
+   },
+   {
+    "name": "motion_anchor_ori_b",
+    "width": 6
+   },
+   {
+    "name": "base_ang_vel",
+    "width": 3
+   },
+   {
+    "name": "joint_pos",
+    "width": 26
+   },
+   {
+    "name": "joint_vel",
+    "width": 26
+   },
+   {
+    "name": "actions",
+    "width": 24
+   }
+  ],
+  "normalizer": "folded into policy.pt / policy.onnx -- feed raw values",
+  "built_by": "the runner, v3/ros2_ws/src/r1_policy_runner dance_obs.hpp (reference v3/dance/dance_obs.py)"
+ },
+ "action": {
+  "dim": 24,
+  "joint_names": [
+   "left_hip_pitch_joint",
+   "right_hip_pitch_joint",
+   "waist_roll_joint",
+   "left_hip_roll_joint",
+   "right_hip_roll_joint",
+   "waist_yaw_joint",
+   "left_hip_yaw_joint",
+   "right_hip_yaw_joint",
+   "left_shoulder_pitch_joint",
+   "right_shoulder_pitch_joint",
+   "left_knee_joint",
+   "right_knee_joint",
+   "left_shoulder_roll_joint",
+   "right_shoulder_roll_joint",
+   "left_ankle_pitch_joint",
+   "right_ankle_pitch_joint",
+   "left_shoulder_yaw_joint",
+   "right_shoulder_yaw_joint",
+   "left_ankle_roll_joint",
+   "right_ankle_roll_joint",
+   "left_elbow_joint",
+   "right_elbow_joint",
+   "left_wrist_roll_joint",
+   "right_wrist_roll_joint"
+  ],
+  "scale": [
+   0.15000000596046448,
+   0.15000000596046448,
+   0.15000000596046448,
+   0.15000000596046448,
+   0.15000000596046448,
+   0.15000000596046448,
+   0.15000000596046448,
+   0.15000000596046448,
+   0.375,
+   0.375,
+   0.15000000596046448,
+   0.15000000596046448,
+   0.375,
+   0.375,
+   0.3125,
+   0.3125,
+   0.4124999940395355,
+   0.4124999940395355,
+   0.3125,
+   0.3125,
+   0.4124999940395355,
+   0.4124999940395355,
+   0.4124999940395355,
+   0.4124999940395355
+  ],
+  "default_joint_pos": [
+   -0.10000000149011612,
+   -0.10000000149011612,
+   0.0,
+   0.0,
+   0.0,
+   0.0,
+   0.0,
+   0.0,
+   0.3499999940395355,
+   0.3499999940395355,
+   0.30000001192092896,
+   0.30000001192092896,
+   0.18000000715255737,
+   -0.18000000715255737,
+   -0.20000000298023224,
+   -0.20000000298023224,
+   0.0,
+   0.0,
+   0.0,
+   0.0,
+   0.8700000047683716,
+   0.8700000047683716,
+   0.0,
+   0.0
+  ],
+  "gains": "assets/r1/r1.py, as v2 (the bridge's joint_map.hpp sends one set)"
+ },
+ "reference": {
+  "file": "dance_ref.bin",
+  "frames": 500,
+  "fps": 50.0,
+  "bars_s": [
+   3.0,
+   3.0,
+   2.0,
+   2.0
+  ]
+ },
+ "jit_vs_checkpoint_max_abs": 0.0,
+ "sha256": {
+  "policy.pt": "08c619c1867b9a0a47dbdc977f9189caf111951ccc06ee6145d724a380a47a1a",
+  "policy.onnx": "2d0be375af0180d6aa85f470d055f0bcb05f84871bbad218ef64a70d7eb7c911",
+  "dance_ref.bin": "eaa4e465cd7d53b8f87a83cc67fb2d79e788bb526f775e0a9edf492cea3c878d"
+ }
+}

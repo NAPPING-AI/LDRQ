@@ -81,6 +81,15 @@ corridor_min_points: 30
 # corridor return; center_valid is the depth return fraction over this part of the image
 # (x0,y0,x1,y1 as fractions), where something pressed against the camera shows as a hole
 proximity_center_region: 0.25,0.25,0.75,1.0
+# What the proximity facts come from (R1, 2026-10-23, user's choice A):
+#   person_box  people only, distance from the box height alone; no depth, no obstacles.
+#               The module's depth is filled in where the head shell hides the right camera
+#               and was never far from 0.2 m in front of an empty room.
+#   depth       people and obstacles from depth (needs a depth source that can be trusted)
+proximity_mode: person_box
+person_box_k: 0.465                       # calibrated 2026-10-24 at 0.65, 1.3 m (no tape)
+                                          # set with tools/person_box_cal.py at arm's length
+person_box_edge: 0.02                     # a box touching top AND bottom (within this) = right in front
 
 # ---- scheduling ----------------------------------------------------------------------
 # Run on every Nth /r1_policy_node/action, i.e. right after a policy inference: the GPU

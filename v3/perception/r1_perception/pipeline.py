@@ -207,18 +207,33 @@ class Pipeline(object):
                          stereo depth has a minimum range, and something pressed
                          against the camera is a hole there, not a near distance"""
         frac = float(self.cfg.get("person_box_frac", 0.8))
+        mode = str(self.cfg.get("proximity_mode", "depth"))
         person_m, near_box, persons = None, False, 0
         for e in entries:
             if e["cls_id"] != Y.PERSON or e["conf"] < self.safety_conf:
                 continue
             persons += 1
-            if e["range_m"] is not None:
+            if mode == "person_box":
+                d, near = self.person_box_distance(e["bbox"])
+                near_box = near_box or near
+                if d is not None:
+                    person_m = d if person_m is None else min(person_m, d)
+            elif e["range_m"] is not None:
                 person_m = e["range_m"] if person_m is None else min(person_m, e["range_m"])
             elif (e["bbox"][3] - e["bbox"][1]) >= frac * self.rect.h:
                 near_box = True
         p = {"v": PROX_VERSION, "person_m": person_m, "person_near_box": near_box,
              "persons": persons, "obstacle_m": None, "corridor_points": 0,
              "depth_valid": 0.0, "center_valid": 0.0, "depth_ok": depth is not None}
+        if mode == "person_box":
+            # Depth is not used at all (R1, 10-23: the module's depth is filled in where the
+            # head shell hides the right camera, and phantom obstacles 0.05-0.35 m away were
+            # in every frame). No obstacle readings, and nothing for the bridge to block on
+            # for lack of depth: the camera vouches for the path by its frames being fresh.
+            if depth is not None:
+                p["depth_valid"] = round(D.valid_fraction(depth, None, int(self.cfg.get("corridor_step", 4))), 3)
+            p["depth_ok"], p["center_valid"] = True, 1.0
+            return p
         if depth is not None:
             fwd, valid = corr if corr is not None else self.corridor(depth)
             k = D.kth_nearest(fwd, int(self.cfg.get("corridor_min_points", 30)))
@@ -230,6 +245,26 @@ class Pipeline(object):
             p["center_valid"] = round(D.valid_fraction(depth, region,
                                                        int(self.cfg.get("corridor_step", 4))), 3)
         return p
+
+    def person_box_distance(self, bbox):
+        """proximity_mode person_box: (distance or None, near) from a person's box alone.
+
+        The box's height as a fraction of the image goes as 1 / distance: distance =
+        person_box_k / fraction, with person_box_k set by tools/person_box_cal.py against
+        an arm's length (no tape). A box touching both the top and the bottom of the image
+        (within person_box_edge) is someone right in front of the camera: near, distance
+        unknown -- as is a box taller than person_box_frac of the image. Width is not used:
+        a person leaning or with an arm out is wide at any distance (R1: 0.24 of the image
+        for someone about 2 m away)."""
+        k = float(self.cfg.get("person_box_k", 0.6))
+        edge = float(self.cfg.get("person_box_edge", 0.02))
+        frac = float(self.cfg.get("person_box_frac", 0.8))
+        h_img = float(self.rect.h)
+        y0, y1 = float(bbox[1]), float(bbox[3])
+        hf = max(1e-6, (y1 - y0) / h_img)
+        if (y0 <= edge * h_img and y1 >= (1.0 - edge) * h_img) or hf >= frac:
+            return None, True
+        return round(k / hf, 3), False
 
     # ------------------------------------------------------------------- all
     def process(self, bgr, depth=None, t_cap=None):

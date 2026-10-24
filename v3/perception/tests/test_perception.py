@@ -7,9 +7,11 @@ models/fetch_yolox.sh); elsewhere it says it was skipped.
 """
 from __future__ import annotations
 
+import io
 import math
 import pathlib
 import sys
+from contextlib import redirect_stdout
 
 import numpy as np
 
@@ -282,6 +284,118 @@ check("the shipped config's center region parses",
       tuple(float(x) for x in str(cfg_file["proximity_center_region"]).split(",")) == (0.25, 0.25, 0.75, 1.0),
       cfg_file.get("proximity_center_region"))
 
+print("== V3 floor fit, height known (tools/fit_floor.py) ==")
+sys.path.insert(0, str(ROOT / "tools"))
+import fit_floor as FF  # noqa: E402
+
+
+def scene_depth(f, pitch, h=1.2, roll=0.0, clutter=True, noise=0.01, seed=0):
+    """A floor seen by a camera with focal f (544 x 448, centred), plus a wall at 2.5 m, a box
+    on the floor 1 m ahead and a blob 0.15 m in front of the lens at the bottom."""
+    cam = C.Rectified(544, 448, fx=f, fy=f, cx=271.5, cy=223.5)
+    vv4, uu4 = np.mgrid[0:448, 0:544]
+    xr, yr = cam.ray(uu4, vv4)
+    if roll:
+        cr, sr = math.cos(math.radians(roll)), math.sin(math.radians(roll))
+        xr, yr = cr * xr - sr * yr, sr * xr + cr * yr
+    fw, _, up = C.Mount(h, pitch, 0.0).to_body(xr, yr, np.ones_like(xr))
+    dz = np.where(up - h < -1e-6, h / np.maximum(1e-9, -(up - h)), np.inf)
+    if clutter:
+        dz = np.minimum(dz, np.where(fw > 0, 2.5 / np.maximum(fw, 1e-9), np.inf))   # wall
+        box = (np.abs(xr) < 0.25) & (fw > 0)
+        dz = np.where(box & (1.0 / np.maximum(fw, 1e-9) < dz) & (up - h > -1.2 + 0.0)
+                      & (h + (up - h) / np.maximum(fw, 1e-9) * 1.0 < 0.4), 1.0 / np.maximum(fw, 1e-9), dz)
+        dz[400:448, 220:320] = 0.15                                                   # near blob
+    dz = np.where(np.isfinite(dz) & (dz < 6.0), dz, 0.0)
+    rng = np.random.RandomState(seed)
+    return (dz * (1.0 + noise * rng.randn(*dz.shape)) * (dz > 0)).astype(np.float32)
+
+
+for f_true, p_true in ((200.0, 25.0), (272.0, 12.0), (330.0, 35.0)):
+    dfl = scene_depth(f_true, p_true)
+    r = FF.fit_floor(*FF.samples(dfl), h=1.2, cx=271.5, cy=223.5)
+    check("floor fit, height known: f {:.0f} px, pitch {:.0f} deg, with a wall, a box and a near "
+          "blob in view".format(f_true, p_true),
+          r is not None and abs(r["pitch"] - p_true) < 1.0 and abs(r["f"] - f_true) / f_true < 0.05
+          and abs(r["roll"]) < 1.0, r and (r["pitch"], r["f"], r["roll"], r["inliers"]))
+r = FF.fit_floor(*FF.samples(scene_depth(220.0, 20.0, roll=3.0, clutter=False)), h=1.2,
+                 cx=271.5, cy=223.5)
+check("...and a 3 deg roll is reported (its size: only |roll| > 5 deg is acted on)",
+      r is not None and abs(abs(r["roll"]) - 3.0) < 0.7, r and r["roll"])
+wall_only = np.where(np.ones((448, 544)), 0.7, 0.0).astype(np.float32)
+check("a wall filling the view is not taken for a floor",
+      FF.fit_floor(*FF.samples(wall_only), h=1.2, cx=271.5, cy=223.5) is None)
+dfl = scene_depth(200.0, 25.0, clutter=False, noise=0.0)
+fwd_bad, _ = D.corridor_points(dfl, C.Rectified(544, 448, fx=272.0, fy=272.0, cx=271.5, cy=223.5),
+                               C.Mount(1.2, 0.0, 0.0))
+fwd_ok, _ = D.corridor_points(dfl, C.Rectified(544, 448, fx=200.0, fy=200.0, cx=271.5, cy=223.5),
+                              C.Mount(1.2, 25.0, 0.0))
+check("a bare floor is in the corridor with the placeholder camera ({} points) and not with the "
+      "fitted one".format(fwd_bad.size), fwd_bad.size > 100 and fwd_ok.size == 0,
+      (fwd_bad.size, fwd_ok.size))
+
+print("== V3 proximity_mode person_box (R1, 2026-10-23) ==")
+import person_box_cal as PBC  # noqa: E402  (tools/ is on the path from the floor-fit tests)
+
+pb = PL.Pipeline(dict(cfg, proximity_mode="person_box", person_box_k=0.6, rectify=0), FakeRT())
+mb, _, _ = pb.process(np.zeros((480, 640, 3), np.uint8), np.full((480, 640), 0.2, np.float32))
+prb = mb["proximity"]
+hb = (mb["dets"][0]["bbox"][3] - mb["dets"][0]["bbox"][1]) / 480.0
+check("person_box: distance = k / box height fraction, depth ignored (it says 0.2 m)",
+      abs(prb["person_m"] - round(0.6 / hb, 3)) < 1e-9 and prb["person_m"] > 1.0, (prb, hb))
+check("person_box: no obstacle readings, and nothing to block on for lack of depth",
+      prb["obstacle_m"] is None and prb["depth_ok"] and prb["center_valid"] == 1.0, prb)
+mb2, _, _ = pb.process(np.zeros((480, 640, 3), np.uint8), None)
+check("person_box: works with no depth at all", mb2["proximity"]["person_m"] == prb["person_m"]
+      and mb2["proximity"]["depth_ok"], mb2["proximity"])
+check("person_box: a box touching top and bottom is right in front",
+      pb.person_box_distance([10, 2, 200, 478]) == (None, True))
+check("person_box: a box taller than person_box_frac is right in front",
+      pb.person_box_distance([10, 40, 200, 440]) == (None, True))
+check("person_box: touching only the bottom (feet out of view) still gives a distance",
+      pb.person_box_distance([10, 200, 200, 479])[0] is not None)
+# The R1 frames (10-23): boxes from the robot's own detections. Depth said 0.56-0.69 m for
+# the person on the right (filled-in depth) and 1.9-3.2 m for the one at the door.
+rb = PL.Pipeline(dict(cfg, proximity_mode="person_box", person_box_k=0.6, rectify=0,
+                      cam_width=544, cam_height=448, cam_fx=272.0, cam_fy=272.0,
+                      cam_cx=271.5, cam_cy=223.5), FakeRT())
+right = [rb.person_box_distance([402, y0, 531, y1])[0] for y0, y1 in
+         ((116, 273), (116, 272), (116, 277), (118, 277), (117, 273))]
+door = [rb.person_box_distance([308, y0, 356, y1])[0] for y0, y1 in
+        ((150, 247), (150, 247), (150, 244), (150, 246), (150, 245))]
+check("R1 frames: the person on the right reads 1.6-1.8 m in every frame (depth: 0.56-0.69)",
+      all(1.6 < d < 1.8 for d in right), right)
+check("R1 frames: the person at the door reads 2.7-2.9 m in every frame (depth: 1.9-3.2)",
+      all(2.7 < d < 2.9 for d in door), door)
+check("the shipped config is person_box", cfg_file.get("proximity_mode") == "person_box"
+      and float(cfg_file.get("person_box_k")) > 0, cfg_file.get("proximity_mode"))
+
+print("== person_box_cal (no tape) ==")
+msg = {"img": [544, 448], "dets": [
+    {"cls": "person", "conf": 0.9, "bbox": [100, 100, 200, 300]},
+    {"cls": "person", "conf": 0.9, "bbox": [300, 50, 500, 410]},
+    {"cls": "chair", "conf": 0.9, "bbox": [0, 0, 544, 448]}]}
+lp = PBC.largest_person(msg, 0.3, 0.02)
+check("the largest person box, as a height fraction", abs(lp[0] - 360 / 448.0) < 1e-9 and not lp[1], lp)
+row = PBC.summarize([(0.92, False), (0.90, False), (0.94, False)], 0.65)
+check("arm's length: k = 0.65 x median height", abs(row["k"] - round(0.65 * 0.92, 4)) < 1e-9, row)
+row2 = PBC.summarize([(1.0, True), (1.0, True), (0.97, False)], 0.65)
+check("boxes cut off at top and bottom give no k", row2["k"] is None and row2["touch_both"] == 2, row2)
+k, spread, n = PBC.combine([{"k": "0.60"}, {"k": "0.66"}, {"k": None}])
+check("two references combine to their median, with the spread", n == 2 and abs(k - 0.63) < 1e-9
+      and abs(spread - 0.06 / 0.63) < 1e-9, (k, spread, n))
+import os as _os  # noqa: E402
+import tempfile as _tf  # noqa: E402
+_c = _os.path.join(_tf.mkdtemp(), "perception.yaml")
+with open(_c, "w") as _fh:
+    _fh.write((ROOT / "config" / "perception.yaml").read_text())
+with redirect_stdout(io.StringIO()):
+    _ok = PBC.write_k(_c, 0.612, "test")
+_new = PL.read_flat_yaml(_c)
+check("write_k changes person_box_k only, and keeps the old file",
+      _ok and float(_new["person_box_k"]) == 0.612 and _os.path.exists(_c + ".before_cal")
+      and {k: v for k, v in _new.items() if k != "person_box_k"}
+      == {k: v for k, v in cfg_file.items() if k != "person_box_k"}, _new.get("person_box_k"))
 print("== stereo source (fake decoder, fake depth device) ==")
 import os  # noqa: E402
 import tempfile  # noqa: E402

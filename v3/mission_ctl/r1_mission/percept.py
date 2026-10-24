@@ -20,13 +20,17 @@ CONFIRMED, NOT_SEEN, AMBIGUOUS, LOW_CONF, NO_DEPTH, STALE = (
 
 
 class Frame(object):
-    __slots__ = ("t_cap", "seq", "dets", "guard")
+    """`prox` (V3): the frame's proximity facts (pipeline.py "proximity"): person_m,
+    person_near_box, obstacle_m, depth_ok, center_valid. None from a perception build
+    without them."""
+    __slots__ = ("t_cap", "seq", "dets", "guard", "prox")
 
-    def __init__(self, t_cap, seq, dets, guard):
+    def __init__(self, t_cap, seq, dets, guard, prox=None):
         self.t_cap = float(t_cap)
         self.seq = int(seq)
         self.dets = list(dets or [])
         self.guard = dict(guard or {})
+        self.prox = dict(prox) if prox else None
 
 
 class Percept(object):
@@ -61,7 +65,7 @@ def from_message(msg, offset=0.0):
     """A /r1_perception/detections dict -> Frame. `offset` maps the camera's time.time()
     to the executor clock: t_exec = t_cap - offset."""
     return Frame(float(msg["t_cap"]) - offset, msg.get("seq", 0), msg.get("dets"),
-                 msg.get("guard"))
+                 msg.get("guard"), msg.get("proximity"))
 
 
 def wrap_deg(a):
@@ -128,7 +132,12 @@ class FakeWorld(object):
     robot's starting frame (x forward, y left). A detection is produced for every object
     inside the half field of view and `max_range`, with that object's confidence;
     `hits` counts consecutive frames in view, as the node's tracker does. The guard
-    reports a person inside person_stop_m and anything inside the corridor ahead."""
+    reports a person inside person_stop_m and anything inside the corridor ahead.
+
+    V3: an object may move -- "vx"/"vy" (m/s, world frame) from "move_t" until
+    "stop_t" (s, both optional) -- and every frame carries the proximity facts the
+    bridge's reflex acts on (Frame.prox): the nearest person in view, the nearest
+    thing in the corridor."""
 
     def __init__(self, objects, hfov_deg=100.0, max_range=8.0, person_stop_m=1.2,
                  obstacle_stop_m=0.6, corridor_half_width_m=0.35, depth=True,
@@ -156,8 +165,19 @@ class FakeWorld(object):
         self.x += (vx * c - vy * s) * dt
         self.y += (vx * s + vy * c) * dt
 
-    def relative(self, o):
-        dx, dy = o["x"] - self.x, o["y"] - self.y
+    @staticmethod
+    def position(o, t=None):
+        """Where object o is at time t (moving objects move between move_t and stop_t)."""
+        if t is None or not (o.get("vx") or o.get("vy")):
+            return o["x"], o["y"]
+        t0 = float(o.get("move_t", 0.0))
+        t1 = float(o.get("stop_t", float("inf")))
+        dt = min(max(0.0, t - t0), max(0.0, t1 - t0))
+        return o["x"] + float(o.get("vx", 0.0)) * dt, o["y"] + float(o.get("vy", 0.0)) * dt
+
+    def relative(self, o, t=None):
+        ox, oy = self.position(o, t)
+        dx, dy = ox - self.x, oy - self.y
         c, s = math.cos(-self.yaw), math.sin(-self.yaw)
         fx, fy = c * dx - s * dy, s * dx + c * dy
         return math.degrees(math.atan2(fy, fx)), math.hypot(fx, fy), fx, fy
@@ -166,7 +186,7 @@ class FakeWorld(object):
         self.seq += 1
         dets, person_m, near, obstacle, obst_m = [], None, False, False, None
         for o in self.objects:
-            b, r, fx, fy = self.relative(o)
+            b, r, fx, fy = self.relative(o, t)
             if o.get("appear_t") is not None and t < o["appear_t"]:
                 continue
             if fx > 0 and abs(fy) <= self.half_width:
@@ -190,4 +210,7 @@ class FakeWorld(object):
                 near = near or r < self.person_stop_m
         guard = {"person_near": near, "person_m": person_m, "obstacle": obstacle,
                  "obstacle_m": obst_m, "depth_ok": self.depth}
-        return Frame(t, self.seq, dets, guard)
+        prox = {"person_m": person_m if self.depth else None, "person_near_box": False,
+                "obstacle_m": obst_m if self.depth else None, "depth_ok": self.depth,
+                "center_valid": 1.0 if self.depth else 0.0}
+        return Frame(t, self.seq, dets, guard, prox)

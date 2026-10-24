@@ -1,0 +1,6 @@
+{
+  "objects": [
+    {"cls": "person", "x": 3.0, "y": 0.0, "conf": 0.9, "vx": -0.5, "move_t": 1.0, "stop_t": 6.0}
+  ],
+  "hfov_deg": 100.0
+}

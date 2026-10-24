@@ -115,7 +115,7 @@ print("\n== schema ==")
 sch = nl.transcription_schema(LIM)
 check("steps capped at max_prims", sch["properties"]["steps"]["maxItems"] == LIM.max_prims)
 variants = sch["properties"]["steps"]["items"]["anyOf"]
-check("thirteen step shapes (stage E adds turn_to and two walk_to)", len(variants) == 13, len(variants))
+check("fifteen step shapes (stage E adds turn_to and two walk_to, V3 two dance)", len(variants) == 15, len(variants))
 check("every shape is closed", all(v["additionalProperties"] is False for v in variants))
 check("walk can say backward and sideways (so the robot can refuse them)",
       set(variants[0]["properties"]["direction"]["enum"]) ==

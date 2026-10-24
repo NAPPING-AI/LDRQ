@@ -21,9 +21,11 @@ import json
 import math
 import re
 
-OPS = ("walk", "turn", "stand", "stop", "turn_to", "walk_to")
+OPS = ("walk", "turn", "stand", "stop", "turn_to", "walk_to", "dance")
 OBJECT_OPS = ("turn_to", "walk_to")
-MOVING_OPS = ("walk", "turn", "turn_to", "walk_to")
+# V3: a dance stays on the spot, but it moves the body (and the waist turns the camera),
+# so a target confirmed before it is not one anybody has looked at afterwards.
+MOVING_OPS = ("walk", "turn", "turn_to", "walk_to", "dance")
 
 # Slowest walk the mission layer will command: the slowest the real robot has walked
 # at (PG-2, 2026-09-28, untethered). With the 2 s floor it makes 0.2 m the shortest
@@ -268,6 +270,9 @@ class Prim(object):
                 self.wz, self.duration_s or 0.0)
         if self.op == "stand":
             return "stand for {:.2f}s".format(self.duration_s or 0.0)
+        if self.op == "dance":
+            return ("dance for {:.0f}s on the spot (the dance policy; ends at the next bar, up to "
+                    "3 s more; steps back if someone comes close)".format(self.duration_s or 0.0))
         if self.op == "turn_to":
             return "turn_to {} ('{}'): face it, IMU-closed turns, checked by the camera".format(
                 self.target_cls, self.target_text)
@@ -340,6 +345,14 @@ class Limits(object):
 # mission ACTS on.
 OBJ_DEFAULTS = {
     "perception": True,           # False: turn_to / walk_to are refused
+    # V3: the bridge runs the proximity reflex. True: follow /r1_hw_bridge/reflex (end
+    # the plan when it steps back or blocks a forward walk; reset it when a new plan
+    # is confirmed) and simulate it in dry runs with a world.
+    "reflex": True,
+    # V3, R1 (2026-10-23): the head camera's depth is not good enough close up, so perception
+    # runs in person_box mode and the reflex acts on people only. True once it also acts on
+    # obstacles (proximity_mode depth, with a depth source that can be trusted).
+    "reflex_obstacles": False,
     # "object": the camera guards the walks inside turn_to / walk_to; "all": every
     # walk needs a fresh frame and stops for a person or an obstacle; "off": none.
     "perception_guard": "object",
@@ -355,10 +368,19 @@ OBJ_DEFAULTS = {
     "obj_segment_m": 1.0,         # walk_to: longest walk between two measurements
     "obj_vx": 0.3,                # walk_to: walking speed (slowed for a short last walk)
     "obj_stop_default_m": 1.0,    # walk_to with no distance said
-    "obj_stop_min_m": 0.8,        # above perception's obstacle_stop_m (0.6): the target is in the corridor
+    "obj_stop_min_m": 0.9,        # V3: above the obstacle stop distance at obj_vx (0.87 m): the target is in the corridor
     "obj_max_range_m": 5.0,       # walk_to refuses a target further than this (depth)
     "obj_max_segments": 10,
     "obj_person_stop_m": 1.2,     # = perception's person_stop_m: walk_to a person stops no nearer
+    # ---- V3: the dance (v3/dance; the bridge runs it, conductor.py) ----
+    "dance": True,                # False: dance steps are refused
+    "dance_default_s": 20.0,      # a dance with no length said
+    "dance_min_s": 5.0,           # half a loop of the routine
+    "dance_max_s": 60.0,          # the bridge caps a dance at 63 s (this + up to a bar to end on)
+    "dance_end_s": 3.0,           # the longest bar: a dance ends at the next bar boundary
+    "dance_start_s": 2.0,         # the bridge must be dancing this soon after the first request:
+                                  # it starts only after 1 s standing still, and a walk before
+                                  # the dance first ramps down (ramp_s)
 }
 
 
@@ -367,6 +389,7 @@ _WALK = re.compile(r"^walk\s+(?:(forward|backward|back|left|right)\s+)?([\d.]+)\
 _TURN_DEG = re.compile(r"^turn\s+(left|right)\s+([\d.]+)\s*(?:deg)?\s*(?:@\s*([\d.]+))?$", re.I)
 _TURN_S = re.compile(r"^turn\s+(left|right)\s+([\d.]+)\s*s\s*(?:@\s*([\d.]+))?$", re.I)
 _STAND = re.compile(r"^stand\s+([\d.]+)\s*s$", re.I)
+_DANCE = re.compile(r"^dance(?:\s+([\d.]+)\s*s)?$", re.I)
 _TURN_TO = re.compile(r"^turn_to\s+(.+?)$", re.I)
 _WALK_TO = re.compile(r"^walk_to\s+(.+?)(?:\s+stop_at\s+([\d.]+)\s*m?)?$", re.I)
 
@@ -415,6 +438,13 @@ def parse_script(script):
         if low == "stop":
             steps.append({"op": "stop", "text": item})
             continue
+        m = _DANCE.match(item)
+        if m:
+            st = {"op": "dance", "text": item}
+            if m.group(1):
+                st["duration_s"] = float(m.group(1))
+            steps.append(st)
+            continue
         m = _WALK_TO.match(item)
         if m:
             st = {"op": "walk_to", "object": m.group(1).strip(), "text": item}
@@ -429,7 +459,7 @@ def parse_script(script):
         raise PlanError(
             "cannot parse '{}'.\n"
             "  walk [forward|backward|left|right] <N>s|<N>m[@<v>] | turn left|right <deg>[@<wz>] |\n"
-            "  turn left|right <N>s[@<wz>] | stand <N>s | stop |\n"
+            "  turn left|right <N>s[@<wz>] | stand <N>s | stop | dance [<N>s] |\n"
             "  turn_to <object> | walk_to <object> [stop_at <N>m]".format(item))
     if not steps:
         raise PlanError("empty plan")
@@ -477,6 +507,24 @@ def compile_plan(steps, env, limits):
                 raise PlanError(_too_short(what, dur, limits))
             prims.append(Prim("stand", duration_s=dur, text=st.get("text", "")))
             total_s += dur
+            continue
+
+        if op == "dance":
+            if not limits.dance:
+                raise PlanError("{}: dancing is off in mission.yaml".format(what))
+            if not limits.reflex:
+                raise PlanError("{}: the bridge dances only with its proximity reflex on, and "
+                                "mission.yaml has reflex off".format(what))
+            dur = limits.dance_default_s if st.get("duration_s") is None else float(st["duration_s"])
+            if dur < limits.dance_min_s - 1e-9:
+                raise PlanError("{}: {:.1f}s is shorter than the shortest dance, {:.0f}s".format(
+                    what, dur, limits.dance_min_s))
+            if dur > limits.dance_max_s + 1e-9:
+                raise PlanError("{}: {:.0f}s is longer than the longest dance, {:.0f}s".format(
+                    what, dur, limits.dance_max_s))
+            prims.append(Prim("dance", duration_s=dur, text=st.get("text", ""),
+                              expected_s=dur + limits.dance_end_s))
+            total_s += dur + limits.dance_end_s
             continue
 
         if op == "walk":
@@ -695,6 +743,8 @@ def plan_from_json(obj, env, limits):
         if unknown:
             raise PlanError("plan[{}]: unknown field(s) {}"
                             .format(i, ", ".join(sorted(unknown))))
+        if op == "dance" and "duration_s" not in item:
+            raise PlanError("plan[{}]: dance needs duration_s".format(i))
         if op == "walk" and (("duration_s" in item) == ("distance_m" in item)):
             raise PlanError("plan[{}]: walk needs exactly one of duration_s or "
                             "distance_m".format(i))

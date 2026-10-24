@@ -23,6 +23,7 @@ from . import nl as NL
 from . import objects as O
 from . import percept as PC
 from . import plan as P
+from . import reflex_link as RL
 from . import yaw as Y
 
 BRIDGE_NS = "/r1_hw_bridge"
@@ -72,10 +73,12 @@ def resolve_envelope(explicit=None):
         cand = (pathlib.Path(root) / "ros2_ws/src/r1_hw_bridge/config/bridge.yaml")
         if cand.is_file():
             return P.Envelope.from_bridge_yaml(cand)
-    # V3 fork: the bridge config is the V3 bridge's own (v3/ros2_ws/...)
-    repo = HERE.parents[1] / "ros2_ws/src/r1_hw_bridge/config/bridge.yaml"
-    if repo.is_file():
-        return P.Envelope.from_bridge_yaml(repo)
+    # V3 fork: the V3 bridge's own config -- v3/ros2_ws/... in the repo, deploy/ros2_ws/...
+    # in an installed tree (~/r1-robot-v3)
+    for repo in (HERE.parents[1] / "ros2_ws/src/r1_hw_bridge/config/bridge.yaml",
+                 HERE.parents[1] / "deploy/ros2_ws/src/r1_hw_bridge/config/bridge.yaml"):
+        if repo.is_file():
+            return P.Envelope.from_bridge_yaml(repo)
     raise P.PlanError(
         "cannot find a command envelope. Set R1_DEPLOY_ROOT (source env.sh) or "
         "pass --envelope <command_envelope.json>.")
@@ -304,29 +307,58 @@ def dry_run(prims, limits, hz, result=None, world=None):
     e = ex.Executor(prims, limits)
     dt, t, acc = 1.0 / hz, 0.0, 0.0
     pc, next_f = (PC.Percept(), 0.0) if world is not None else (None, None)
+    # V3: with a world, the bridge's reflex is simulated too (the reference state
+    # machine): it sees the world's frames and the robot moves by what it lets through.
+    sim = RL.SimReflex() if world is not None and limits.reflex else None
     print("\n{:>8}  {:>6} {:>6} {:>6}  {:<10} {}".format("t", "vx", "vy", "wz", "state",
                                                           "event"))
-    last = None
+    last, rstate, t_end = None, None, None
     while t < limits.max_total_s * 2 + 30:
         if world is not None:
             while next_f <= t:
-                pc.add(world.frame(next_f))
+                f = world.frame(next_f)
+                if f.prox is not None and not limits.reflex_obstacles:
+                    # as on the robot in person_box mode: no obstacle readings
+                    f.prox = dict(f.prox, obstacle_m=None)
+                pc.add(f)
+                if sim is not None:
+                    sim.see(f)
                 next_f += 1.0 / FRAME_HZ
-        out = e.step(t, yaw=acc, bridge_state="RUNNING", percept=pc)
-        line = (out.vx, out.vy, out.wz, out.state)
-        if out.event or line != last:
-            print("{:8.2f}  {:6.3f} {:6.3f} {:6.3f}  {:<10} {}".format(
-                t, out.vx, out.vy, out.wz, out.state, out.event or ""))
-            last = line
-        if out.state in (ex.DONE, ex.ABORTED):
+        if t_end is None:
+            out = e.step(t, yaw=acc, bridge_state="RUNNING", percept=pc,
+                         reflex=sim.last if sim is not None else None)
+            cmd = (out.vx, out.vy, out.wz)
+        else:
+            out, cmd = None, (0.0, 0.0, 0.0)
+        if sim is not None:
+            cmd, st = sim.step(t, cmd, dance=None if out is None else out.dance)
+            if st.state != rstate:
+                if rstate is not None:
+                    print("{:8.2f}  reflex {} -> {}  {}".format(t, rstate, st.state, st.text))
+                rstate = st.state
+        if out is not None:
+            line = (out.vx, out.vy, out.wz, out.state)
+            if out.event or line != last:
+                print("{:8.2f}  {:6.3f} {:6.3f} {:6.3f}  {:<10} {}".format(
+                    t, out.vx, out.vy, out.wz, out.state, out.event or ""))
+                last = line
+            if out.state in (ex.DONE, ex.ABORTED):
+                t_end = t
+        # Once the plan has ended the bridge may still be stepping back: keep the
+        # simulated robot going until it stands (bounded).
+        if t_end is not None and (sim is None or rstate != RL.RETREAT or t - t_end > 5.0):
             break
-        acc += out.wz * dt
+        acc += cmd[2] * dt
         if world is not None:
-            world.move(out.vx, out.wz, dt, vy=out.vy)
+            world.move(cmd[0], cmd[2], dt, vy=cmd[1])
         t += dt
     rep = e.report()
     if result is not None:
         result["report"] = rep
+        if world is not None:
+            result["robot_xy"] = (world.x, world.y)
+        if sim is not None:
+            result["reflex"] = sim.last.to_dict() if sim.last else None
     print("\nreport:\n" + json.dumps(rep, indent=2, ensure_ascii=False))
     return 0 if e.state == ex.DONE else 1
 
@@ -336,8 +368,9 @@ def live_run(prims, limits, hz, allow_second_writer=False, result=None):
     import rclpy
     from rclpy.node import Node
     from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
-    from std_msgs.msg import Float32MultiArray, String
+    from std_msgs.msg import Bool, Empty, Float32MultiArray, String
     camera = needs_camera(prims, limits)
+    dances = any(p.op == "dance" for p in prims)
 
     class Mission(Node):
         def __init__(self):
@@ -371,8 +404,31 @@ def live_run(prims, limits, hz, allow_second_writer=False, result=None):
                 self.create_subscription(
                     String, DETECTIONS_TOPIC, self.on_detections,
                     QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE))
+            # V3: the bridge's reflex. RELIABLE with history, as the bridge publishes it:
+            # the one message saying a retreat started must not be missed.
+            self.reflex = None
+            self.reset_pub = None
+            if limits.reflex:
+                self.create_subscription(
+                    String, RL.REFLEX_TOPIC, self.on_reflex,
+                    QoSProfile(depth=20, reliability=ReliabilityPolicy.RELIABLE))
+                self.reset_pub = self.create_publisher(
+                    Empty, RL.RESET_TOPIC, QoSProfile(depth=5, reliability=ReliabilityPolicy.RELIABLE))
+            # V3: the dance request / heartbeat (executor Output.dance), only for a plan
+            # that dances, so an ordinary plan never speaks on it.
+            self.dance_pub = None
+            if dances:
+                self.dance_pub = self.create_publisher(
+                    Bool, RL.DANCE_TOPIC, QoSProfile(depth=5, reliability=ReliabilityPolicy.RELIABLE))
             self.msg = Float32MultiArray()
+            self.started = False
             self.create_timer(1.0 / hz, self.tick)
+
+        def on_reflex(self, m):
+            try:
+                self.reflex = RL.ReflexStatus.from_json(m.data)
+            except (ValueError, KeyError):
+                pass
 
         def on_detections(self, m):
             try:
@@ -395,7 +451,13 @@ def live_run(prims, limits, hz, allow_second_writer=False, result=None):
             self.msg.data = [float(vx), float(vy), float(wz)]
             self.pub.publish(self.msg)
 
+        def send_dance(self, on):
+            if self.dance_pub is not None and on is not None:
+                self.dance_pub.publish(Bool(data=bool(on)))
+
         def tick(self):
+            if not self.started:
+                return
             now = time.monotonic()
             t = now - self.t0
             yawv = self.tracker.total if self.tracker.ready else None
@@ -404,8 +466,10 @@ def live_run(prims, limits, hz, allow_second_writer=False, result=None):
             # this process has lost it. Either way, stop trusting the last value.
             if self.last_status is not None and now - self.last_status > 3.0:
                 state = "NO_STATUS"
-            out = self.ex.step(t, yaw=yawv, bridge_state=state, percept=self.percept)
+            out = self.ex.step(t, yaw=yawv, bridge_state=state, percept=self.percept,
+                               reflex=self.reflex)
             self.send(out.vx, out.vy, out.wz)
+            self.send_dance(out.dance)
             if out.event:
                 self.get_logger().info(out.event)
             if out.state in (ex.DONE, ex.ABORTED):
@@ -440,6 +504,38 @@ def live_run(prims, limits, hz, allow_second_writer=False, result=None):
             node.destroy_node()
             rclpy.shutdown()
             return 2
+    if limits.reflex:
+        # V3: the operator has confirmed this plan. If the reflex is holding the robot
+        # standing after a retreat, ask the bridge to let go; it refuses while the
+        # person or obstacle is still too close, and then nothing starts. The bridge
+        # publishes its reflex state at least every 0.5 s: wait that long for it.
+        t_wait = time.monotonic() + 0.7
+        while node.reflex is None and time.monotonic() < t_wait and not stop["flag"]:
+            rclpy.spin_once(node, timeout_sec=0.05)
+        if node.reflex is None:
+            print("note: nothing on {} -- the bridge's proximity reflex is off (or this "
+                  "is not a V3 bridge)".format(RL.REFLEX_TOPIC))
+        ok, msg = RL.reset_before_start(lambda: node.reflex,
+                                        lambda: node.reset_pub.publish(Empty()),
+                                        lambda dt: rclpy.spin_once(node, timeout_sec=dt))
+        if msg:
+            print(("" if ok else "NOT STARTED: ") + msg)
+        if not ok:
+            rep = {"executed": [], "final_state": ex.ABORTED, "abort_reason": msg}
+            if node.reflex is not None:
+                rep["reflex"] = node.reflex.to_dict()
+            if result is not None:
+                result["report"] = rep
+            node.destroy_node()
+            rclpy.shutdown()
+            print("\nreport:\n" + json.dumps(rep, indent=2, ensure_ascii=False))
+            return 2
+    # The executor's clock starts now (after any reset wait), and the camera's time.time()
+    # stamps are mapped onto it from this same instant; frames from before are dropped.
+    node.t0, node.wall0 = time.monotonic(), time.time()
+    if node.percept is not None:
+        node.percept = PC.Percept()
+    node.started = True
     print("waiting for the bridge... (it must reach RUNNING before the plan starts)")
     while rclpy.ok() and not stop["flag"] and not node.finished:
         rclpy.spin_once(node, timeout_sec=0.05)
@@ -452,6 +548,7 @@ def live_run(prims, limits, hz, allow_second_writer=False, result=None):
     try:
         for _ in range(5):
             node.send(0.0, 0.0, 0.0)
+            node.send_dance(False if dances else None)   # end a dance at its next bar
             rclpy.spin_once(node, timeout_sec=0.02)
     except Exception as exc:
         print("could not send the final zero ({}); the bridge deadman will "
@@ -545,6 +642,27 @@ def capability_text(env, lim):
             "at most {:.1f} m and look again after each. You confirm the target on a "
             "picture first. It must be the first thing in the plan that moves me."
             .format(", ".join(O.known_kinds()), lim.obj_stop_default_m, lim.obj_segment_m))
+    if lim.reflex and lim.reflex_obstacles:
+        lines.append("If a person comes within about 0.6 m of me, or something within "
+                     "about 0.45 m in front of me, I step back on my own and then stand "
+                     "still until you give me a new instruction. I also stop walking "
+                     "forward well before that, earlier the faster I walk. My camera looks "
+                     "forward only: I cannot see behind me or to the sides.")
+    elif lim.reflex:
+        lines.append("If a person comes within about 0.6 m of me, about an arm's length, I "
+                     "step back on my own and then stand still until you give me a new "
+                     "instruction. I also stop walking forward when a person is within about "
+                     "1.2 m, more the faster I walk. I do not do this for objects yet: my "
+                     "camera cannot judge their distance reliably up close. My camera looks "
+                     "forward only: I cannot see behind me or to the sides.")
+    if lim.dance and lim.reflex:
+        lines.append("I can dance on the spot: my own short routine (waving one arm, then the "
+                     "other, arms up with a knee dip), for {:.0f} to {:.0f} s ({:.0f} s if you "
+                     "do not say), finishing the move I am in. I only start if nobody is "
+                     "within about 1 m of me. If someone comes within about 0.9 m while I "
+                     "dance, I stop at once, step back and stand still until you give me a "
+                     "new instruction. I know one dance only, and I do not walk while I "
+                     "dance.".format(lim.dance_min_s, lim.dance_max_s, lim.dance_default_s))
     lines.append("Each step must last at least {:.0f} s. A plan may have at most {} steps, "
                  "{:.0f} s in total, and {:.0f} m in total."
                  .format(lim.min_primitive_s, lim.max_prims, lim.max_total_s, lim.max_total_m))
@@ -606,7 +724,9 @@ def confirm(skip=False):
 # ------------------------------------------------------------------------ ask
 DEFAULT_LLM_URL = "http://127.0.0.1:11434"
 DEFAULT_LLM_MODEL = "qwen3:1.7b"
-LLM_CTL = HERE.parents[2] / "llm" / "ollama_ctl.sh"  # V3 fork: llm/ is shared, at the repo root
+# V3 fork: llm/ is next to mission_ctl/ in an installed tree, at the repo root in the repo
+LLM_CTL = next((d / "llm" / "ollama_ctl.sh" for d in (HERE.parents[1], HERE.parents[2])
+                if (d / "llm" / "ollama_ctl.sh").is_file()), HERE.parents[1] / "llm" / "ollama_ctl.sh")
 LLM_HINT = ("  Is the model server up?  bash {0} status\n"
             "  A known llama-server fault on the Orin NX leaves it running but not\n"
             "  answering; restarting it clears that:  bash {0} restart".format(LLM_CTL))

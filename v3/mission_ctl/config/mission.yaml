@@ -85,6 +85,16 @@ llm_num_thread: 4        # CPU threads when on the CPU; 0 = Ollama's default (ev
 # The camera node is perception/ (its own perception.yaml decides what is published
 # and the per-frame safety facts); these decide what the mission ACTS on.
 perception: on           # off: turn_to / walk_to are refused
+reflex: on               # V3: follow the bridge's proximity reflex (/r1_hw_bridge/reflex):
+                         # end the plan when it steps back or blocks a forward walk, reset
+                         # it when a new plan is confirmed; simulated in dry runs with --world
+reflex_obstacles: off    # V3 R1 (10-23): people only (perception proximity_mode person_box): the
+                         # head camera's depth is filled in close up. on: obstacles too
+dance: on                # V3: the `dance` step -- the bridge's dance policy, on the spot.
+                         # Needs reflex on (the bridge refuses to dance without it)
+dance_default_s: 20      # a dance with no length said
+dance_min_s: 5
+dance_max_s: 60          # the bridge caps a dance at 63 s (+ up to a bar to end on)
 perception_guard: object # object: camera-guard the walks inside turn_to / walk_to
                          # all: every walk needs fresh frames, stops for people/obstacles
                          # off: no camera guard on plain walks (object steps keep theirs)

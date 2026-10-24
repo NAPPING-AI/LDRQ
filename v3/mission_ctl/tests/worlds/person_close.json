@@ -1,0 +1,6 @@
+{
+  "objects": [
+    {"cls": "person", "x": 0.95, "y": 0.0, "conf": 0.9}
+  ],
+  "hfov_deg": 100.0
+}

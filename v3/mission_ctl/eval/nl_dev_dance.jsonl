@@ -1,0 +1,8 @@
+{"id": "H01", "cat": "dance", "text": "Let's see you dance.", "expect": [[{"op": "dance"}]], "outcome": "execute"}
+{"id": "H02", "cat": "dance", "text": "Dance for 25 seconds please.", "expect": [[{"op": "dance", "duration_s": 25}]], "outcome": "execute"}
+{"id": "H03", "cat": "mixed", "text": "Stand for 2 seconds, then dance for 12 seconds.", "expect": [[{"op": "stand", "duration_s": 2}, {"op": "dance", "duration_s": 12}]], "outcome": "execute"}
+{"id": "H04", "cat": "mixed", "text": "Dance a bit and then turn right 90 degrees.", "expect": [[{"op": "dance"}, {"op": "turn", "direction": "right", "angle_deg": 90}]], "outcome": "execute"}
+{"id": "H05", "cat": "limit", "text": "Dance for 3 minutes.", "expect": [[{"op": "dance", "duration_s": 180}]], "outcome": "refuse"}
+{"id": "H06", "cat": "refuse", "text": "Do the robot dance and the splits.", "expect": [[{"op": "dance"}, {"op": "unsupported"}]], "outcome": "refuse"}
+{"id": "H07", "cat": "refuse", "text": "Clap your hands.", "expect": [[{"op": "unsupported"}]], "outcome": "refuse"}
+{"id": "H08", "cat": "stop", "text": "Quit dancing now.", "expect": [[{"op": "stop"}]], "outcome": "execute"}

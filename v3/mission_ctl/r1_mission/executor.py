@@ -13,18 +13,31 @@ from __future__ import annotations
 import math
 
 from . import percept as PC
+from . import reflex_link as RL
 from .plan import OBJECT_OPS, TAPER_DEG, WALK_MIN_VX, expected_turn_s, taper_floor
 
 IDLE, RUNNING, DONE, ABORTED = "IDLE", "RUNNING", "DONE", "ABORTED"
 
+# V3: a forward walk the bridge cuts ends after this long, not at once. A block is often
+# the first frame of something that is about to start a retreat (two frames later), and
+# then the reply should say that the robot stepped back, not that it was blocked.
+BLOCK_GRACE_S = 0.3
+
+
+def prim_is_dance(prim):
+    return prim is not None and prim.op == "dance"
+
 
 class Output(object):
-    __slots__ = ("vx", "vy", "wz", "state", "event")
+    """`dance` (V3): None = say nothing; True = ask the bridge to dance (sent every step,
+    it is the heartbeat); False = ask it to end the dance."""
+    __slots__ = ("vx", "vy", "wz", "state", "event", "dance")
 
-    def __init__(self, vx, vy, wz, state, event=None):
+    def __init__(self, vx, vy, wz, state, event=None, dance=None):
         self.vx, self.vy, self.wz = vx, vy, wz
         self.state = state
         self.event = event
+        self.dance = dance
 
     def as_tuple(self):
         return (self.vx, self.vy, self.wz)
@@ -50,6 +63,7 @@ class Record(object):
         self.segments = []       # each walk: vx, seconds, open-loop meters
         self.final = None        # the last confirmed sighting
         self.note = None
+        self.danced_s = None     # dance: seconds on the dance policy; None = it never started
 
     def _object_dict(self, d):
         p = self.prim
@@ -117,6 +131,8 @@ class Record(object):
             else:
                 d["est_err_m"] = round(self.est_err_m, 3)
                 d["distance_source"] = "open loop: commanded time x calibrated speed"
+        if self.prim.op == "dance":
+            d["danced_s"] = None if self.danced_s is None else round(self.danced_s, 3)
         if self.aborted:
             d["aborted"] = self.aborted
         return d
@@ -137,6 +153,8 @@ class Executor(object):
         self._t_last = None          # the clock at the last step()
         self.abort_reason = None
         self._ob = None              # turn_to / walk_to: the current phase and its state
+        self.reflex_event = None     # V3: the bridge reflex's status when it ended the plan
+        self._t_blocked = None       # V3: since when the bridge has been cutting forward
 
     # ---------------------------------------------------------------- helpers
     @property
@@ -182,15 +200,23 @@ class Executor(object):
         a = min(1.0, max(0.0, elapsed / self.lim.ramp_s)) if self.lim.ramp_s > 0 else 1.0
         return sign * mag * taper * a
 
-    def _guard(self, t, percept):
+    def _guard(self, t, percept, vx=0.0):
         """Why a walk under camera guard must stop now, or None. Acts on single frames:
-        the safety check does not wait for the confirmation that targets need."""
+        the safety check does not wait for the confirmation that targets need.
+
+        V3: with the frame's proximity facts, the stop distance grows with the walking
+        speed `vx` -- the same formula as the bridge's (v3/reflex/stop_distance.py),
+        computed here independently, so either one stops the walk if the other is
+        misconfigured. Without them (an older perception), the fixed guard as before."""
         if percept is None or percept.latest is None:
             return "no camera frames (is r1_perception running?)"
         age = percept.age(t)
         if age > self.lim.obj_stale_s:
             return "camera frames stale ({:.2f} s old, limit {:.2f} s)".format(
                 age, self.lim.obj_stale_s)
+        px = percept.latest.prox
+        if px is not None:
+            return self._stop_distance_guard(px, vx)
         g = percept.latest.guard
         if g.get("person_near"):
             pm = g.get("person_m")
@@ -202,12 +228,72 @@ class Executor(object):
                 "{:.2f} m ahead".format(om) if om is not None else "close")
         return None
 
+    @staticmethod
+    def _stop_distance_guard(px, vx):
+        _, SD = RL.reference()
+        v = max(0.0, vx)
+        if not px.get("depth_ok", True):
+            return "no depth from the camera -- stopped"
+        pm, om = px.get("person_m"), px.get("obstacle_m")
+        if px.get("person_near_box"):
+            return "person right in front of the camera -- stopped"
+        sp = SD.stop_distance("person", v)
+        if pm is not None and pm < sp:
+            return "person {:.2f} m ahead, inside the {:.2f} m stop distance at {:.2f} m/s -- " \
+                "stopped".format(pm, sp, v)
+        so = SD.stop_distance("obstacle", v)
+        if om is not None and om < so:
+            return "obstacle {:.2f} m ahead in the walking corridor, inside the {:.2f} m stop " \
+                "distance at {:.2f} m/s -- stopped".format(om, so, v)
+        return None
+
+    def _reflex(self, t, reflex):
+        """V3: an Output that ends the plan because the bridge's reflex took over or is
+        cutting a forward walk, else None."""
+        if reflex is None or self.state != RUNNING:
+            return None
+        # A walk the bridge stopped ended when it stopped: from then on the robot did
+        # not walk, and the record (time x speed) must not count it.
+        t_stop = self._t_blocked if self._t_blocked is not None else t
+        if reflex.state in RL.TAKEN_OVER:
+            self.reflex_event = reflex.to_dict()
+            out = self._abort_at(RL.taken_over_reason(reflex), t, t_stop)
+            if prim_is_dance(self.current):
+                out.dance = False
+            return out
+        prim = self.current
+        fwd = prim is not None and (
+            (prim.op == "walk" and prim.vx > 0.0)
+            or (self._ob is not None and self._ob.get("phase") == "walk"))
+        if not (fwd and reflex.forward_clamped):
+            self._t_blocked = None
+            return None
+        if self._t_blocked is None:
+            self._t_blocked = t
+        if t - self._t_blocked < BLOCK_GRACE_S:
+            return None
+        self.reflex_event = reflex.to_dict()
+        return self._abort_at(RL.blocked_reason(reflex), t, self._t_blocked)
+
+    def interrupt_output(self):
+        """What to send once more when the plan is interrupted from outside: zero, and
+        if a dance is running, the request to end it."""
+        return Output(0.0, 0.0, 0.0, self.state, None,
+                      dance=False if prim_is_dance(self.current) else None)
+
+    def _abort_at(self, reason, t, t_stop):
+        out = self._abort(reason, t)
+        if self.records and self._t_prim is not None:
+            self.records[-1].actual_s = max(0.0, t_stop - self._t_prim)
+        return out
+
     # ------------------------------------------------------------------- step
-    def step(self, t, yaw=None, bridge_state="RUNNING", percept=None):
+    def step(self, t, yaw=None, bridge_state="RUNNING", percept=None, reflex=None):
         """Advance to wall-clock `t`. `yaw` is accumulated radians from
         YawTracker (None if not yet available). `percept` is a percept.Percept (None
         without a camera): turn_to / walk_to need it, and so does every walk when
-        perception_guard is "all". Returns an Output."""
+        perception_guard is "all". `reflex` (V3) is the newest
+        reflex_link.ReflexStatus from the bridge, None without one. Returns an Output."""
         if self.state in (DONE, ABORTED):
             return Output(0.0, 0.0, 0.0, self.state)
 
@@ -225,6 +311,9 @@ class Executor(object):
         if self.state == IDLE:
             if bridge_state == "DEGRADED":
                 return self._abort("bridge is DEGRADED -- clear it (~/resume) first", t)
+            if bridge_state == "RUNNING" and reflex is not None and reflex.state in RL.TAKEN_OVER:
+                self.reflex_event = reflex.to_dict()
+                return self._abort("not started: " + RL.taken_over_reason(reflex), t)
             if bridge_state != "RUNNING":
                 # Wait, do not start: before the first ~/status arrives the state is
                 # simply unknown, and the policy may still be filling its history.
@@ -243,6 +332,10 @@ class Executor(object):
             return Output(0.0, 0.0, 0.0, RUNNING,
                           "start: " + (self.current.summary() if self.current else ""))
 
+        took = self._reflex(t, reflex)
+        if took is not None:
+            return took
+
         # Once the final primitive is done we are only holding zero. Re-entering
         # the per-primitive logic here would keep rewriting that primitive's
         # record (its actual_s would come out as duration + settle_s).
@@ -256,7 +349,11 @@ class Executor(object):
         elapsed = t - self._t_prim
         finished, note = False, None
 
-        if prim.op in OBJECT_OPS:
+        if prim.op == "dance":
+            out, finished, note = self._dance_tick(t, prim, rec, reflex, elapsed)
+            if out is not None:
+                return out
+        elif prim.op in OBJECT_OPS:
             if prim.budget_s is not None and elapsed > prim.budget_s:
                 rec.aborted = "{} took longer than its {:.0f} s budget".format(
                     prim.op, prim.budget_s)
@@ -265,12 +362,12 @@ class Executor(object):
             if out is not None:
                 return out
         elif prim.op == "walk" and self.lim.perception_guard == "all":
-            why = self._guard(t, percept)
+            why = self._guard(t, percept, prim.vx)
             if why:
                 rec.aborted = why
                 return self._abort(why, t)
 
-        if prim.op in OBJECT_OPS:
+        if prim.op in OBJECT_OPS or prim.op == "dance":
             pass
         elif prim.closed_loop:
             if yaw is None:
@@ -328,6 +425,69 @@ class Executor(object):
 
         vx, vy, wz = self._ramped(t, prim)
         return Output(vx, vy, wz, RUNNING)
+
+    # ------------------------------------------------------------------ dance
+    # The bridge runs the dance (the dance policy, conductor.py); this asks for it and
+    # follows it:
+    #   start   ramp the walking command to zero and send dance=True; the bridge starts once
+    #           the walking policy has stood still for 1 s, and must be dancing within
+    #           dance_start_s (+0.5 s of message latency), else it refused: its status says why
+    #   dance   keep sending dance=True (the heartbeat) for the step's duration_s
+    #   ending  send dance=False; the bridge hands back to the walking policy at the next
+    #           bar boundary (<= dance_end_s); the step is done when it has
+    # A retreat ends the plan through _reflex() like for any step. Every abort while
+    # dancing says dance=False, so the bridge ends at the next bar, not after a lapse.
+    def _dance_tick(self, t, prim, rec, reflex, elapsed):
+        """(Output or None, finished, note) for one step of a dance."""
+        lim = self.lim
+        ob = self._ob
+        if ob is None:
+            ob = self._ob = {"phase": "start", "t_dance": None, "t_end": None}
+        if reflex is None:
+            return self._dance_abort(
+                "no status from the bridge on {}: it dances only with its reflex on (is this "
+                "the V3 bridge, with reflex_enable true?)".format(RL.REFLEX_TOPIC), t), False, None
+        if ob["phase"] == "start":
+            if reflex.policy == RL.DANCE_POLICY:
+                ob["phase"], ob["t_dance"] = "dance", t
+                return Output(0.0, 0.0, 0.0, RUNNING, "dancing", dance=True), False, None
+            if elapsed > lim.dance_start_s + 0.5:
+                why = reflex.dance_text if reflex.dance_reason in RL.D_REFUSALS else \
+                    "it did not start within {:.1f} s".format(lim.dance_start_s + 0.5)
+                rec.aborted = "the bridge did not dance: " + (why or "no reason given")
+                return self._dance_abort(rec.aborted, t), False, None
+            vx, vy, wz = self._ramped(t, prim)
+            return Output(vx, vy, wz, RUNNING, None, dance=True), False, None
+        if ob["phase"] == "dance":
+            if reflex.policy != RL.DANCE_POLICY:
+                if reflex.dance_reason == RL.D_DONE:       # the bridge ended it (its cap)
+                    rec.actual_s = rec.danced_s = t - ob["t_dance"]
+                    return None, True, "the bridge ended the dance after {:.1f} s".format(rec.actual_s)
+                rec.danced_s = t - ob["t_dance"]
+                rec.aborted = "the dance stopped: " + (reflex.dance_text or "no reason given")
+                return self._dance_abort(rec.aborted, t), False, None
+            if t - ob["t_dance"] >= prim.duration_s:
+                ob["phase"], ob["t_end"] = "ending", t
+                return Output(0.0, 0.0, 0.0, RUNNING, "ending the dance at the next bar",
+                              dance=False), False, None
+            return Output(0.0, 0.0, 0.0, RUNNING, None, dance=True), False, None
+        # ending
+        if reflex.policy != RL.DANCE_POLICY:
+            rec.actual_s = rec.danced_s = t - ob["t_dance"]
+            return None, True, "danced {:.1f} s, back to standing".format(rec.actual_s)
+        if t - ob["t_end"] > lim.dance_end_s + 1.0:
+            rec.danced_s = t - ob["t_dance"]
+            rec.aborted = "the dance did not end within {:.1f} s of asking".format(lim.dance_end_s + 1.0)
+            return self._dance_abort(rec.aborted, t), False, None
+        return Output(0.0, 0.0, 0.0, RUNNING, None, dance=False), False, None
+
+    def _dance_abort(self, reason, t):
+        out = self._abort(reason, t)
+        rec = self.records[-1] if self.records else None
+        if rec is not None and rec.actual_s is None and self._t_prim is not None:
+            rec.actual_s = max(0.0, t - self._t_prim)     # _abort skips it: rec.aborted was set
+        out.dance = False
+        return out
 
     # ------------------------------------------------------- turn_to / walk_to
     # Phases, in a loop until done:
@@ -413,7 +573,7 @@ class Executor(object):
         # walk
         w = ob["walk"]
         e = t - w["t0"]
-        why = self._guard(t, percept)
+        why = self._guard(t, percept, w["vx"])
         if why:
             rec.segments.append((w["vx"], e, w["vx"] * max(0.0, e - lim.ramp_s / 2.0)))
             rec.aborted = why
@@ -500,9 +660,12 @@ class Executor(object):
         self.state = ABORTED
         self.abort_reason = reason
         if self.records and self.records[-1].aborted is None:
-            self.records[-1].aborted = reason
+            rec = self.records[-1]
+            rec.aborted = reason
             if self._t_prim is not None:
-                self.records[-1].actual_s = max(0.0, t - self._t_prim)
+                rec.actual_s = max(0.0, t - self._t_prim)
+            if rec.prim.op == "dance" and rec.danced_s is None and (self._ob or {}).get("t_dance") is not None:
+                rec.danced_s = max(0.0, t - self._ob["t_dance"])   # a retreat, Ctrl-C, ...
         return Output(0.0, 0.0, 0.0, ABORTED, "ABORT: " + reason)
 
     def interrupt(self, reason, t=None):
@@ -518,6 +681,9 @@ class Executor(object):
         return self._abort(reason, t)
 
     def report(self):
-        return {"executed": [r.to_dict() for r in self.records],
-                "final_state": self.state,
-                "abort_reason": self.abort_reason}
+        rep = {"executed": [r.to_dict() for r in self.records],
+               "final_state": self.state,
+               "abort_reason": self.abort_reason}
+        if self.reflex_event is not None:
+            rep["reflex"] = self.reflex_event
+        return rep

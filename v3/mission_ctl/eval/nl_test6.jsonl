@@ -1,0 +1,30 @@
+{"id": "G01", "cat": "dance", "text": "Dance.", "expect": [[{"op": "dance"}]], "outcome": "execute"}
+{"id": "G02", "cat": "dance", "text": "Dance for 30 seconds.", "expect": [[{"op": "dance", "duration_s": 30}]], "outcome": "execute"}
+{"id": "G03", "cat": "dance", "text": "Do a little dance.", "expect": [[{"op": "dance"}]], "outcome": "execute"}
+{"id": "G04", "cat": "dance", "text": "Show me your dance for 20 seconds.", "expect": [[{"op": "dance", "duration_s": 20}]], "outcome": "execute"}
+{"id": "G05", "cat": "dance", "text": "Can you dance for half a minute?", "expect": [[{"op": "dance", "duration_s": 30}]], "outcome": "execute"}
+{"id": "G06", "cat": "dance", "text": "Perform your dance routine.", "expect": [[{"op": "dance"}]], "outcome": "execute"}
+{"id": "G07", "cat": "dance", "text": "Start dancing.", "expect": [[{"op": "dance"}]], "outcome": "execute"}
+{"id": "G08", "cat": "dance", "text": "Dance for one minute.", "expect": [[{"op": "dance", "duration_s": 60}]], "outcome": "execute"}
+{"id": "G09", "cat": "dance", "text": "Please dance for me for 40 seconds.", "expect": [[{"op": "dance", "duration_s": 40}]], "outcome": "execute"}
+{"id": "G10", "cat": "dance", "text": "Give us a short dance of 8 seconds.", "expect": [[{"op": "dance", "duration_s": 8}]], "outcome": "execute"}
+{"id": "G11", "cat": "mixed", "text": "Dance for 15 seconds, then stand still for 3 seconds.", "expect": [[{"op": "dance", "duration_s": 15}, {"op": "stand", "duration_s": 3}]], "outcome": "execute"}
+{"id": "G12", "cat": "mixed", "text": "Walk forward 1 meter and then dance.", "expect": [[{"op": "walk", "direction": "forward", "distance_m": 1}, {"op": "dance"}]], "outcome": "execute"}
+{"id": "G13", "cat": "mixed", "text": "Turn left 90 degrees and dance for 10 seconds.", "expect": [[{"op": "turn", "direction": "left", "angle_deg": 90}, {"op": "dance", "duration_s": 10}]], "outcome": "execute"}
+{"id": "G14", "cat": "mixed", "text": "Dance for 20 seconds and then walk back 1 meter.", "expect": [[{"op": "dance", "duration_s": 20}, {"op": "walk", "direction": "backward", "distance_m": 1}]], "outcome": "execute"}
+{"id": "G15", "cat": "mixed", "text": "Dance for ten seconds, then turn right 180 degrees and walk forward 2 meters.", "expect": [[{"op": "dance", "duration_s": 10}, {"op": "turn", "direction": "right", "angle_deg": 180}, {"op": "walk", "direction": "forward", "distance_m": 2}]], "outcome": "execute"}
+{"id": "G16", "cat": "limit", "text": "Dance for 5 minutes.", "expect": [[{"op": "dance", "duration_s": 300}]], "outcome": "refuse"}
+{"id": "G17", "cat": "limit", "text": "Dance for 2 minutes.", "expect": [[{"op": "dance", "duration_s": 120}]], "outcome": "refuse"}
+{"id": "G18", "cat": "limit", "text": "Do a dance for 3 seconds.", "expect": [[{"op": "dance", "duration_s": 3}]], "outcome": "refuse"}
+{"id": "G19", "cat": "stop", "text": "Stop dancing.", "expect": [[{"op": "stop"}]], "outcome": "execute"}
+{"id": "G20", "cat": "stop", "text": "Don't dance, just stand for 5 seconds.", "expect": [[{"op": "stand", "duration_s": 5}]], "outcome": "execute"}
+{"id": "G21", "cat": "refuse", "text": "Do the moonwalk.", "expect": [[{"op": "unsupported"}]], "outcome": "refuse"}
+{"id": "G22", "cat": "refuse", "text": "Do a backflip.", "expect": [[{"op": "unsupported"}]], "outcome": "refuse"}
+{"id": "G23", "cat": "refuse", "text": "Wave at me.", "expect": [[{"op": "unsupported"}]], "outcome": "refuse"}
+{"id": "G24", "cat": "refuse", "text": "Take a bow.", "expect": [[{"op": "unsupported"}]], "outcome": "refuse"}
+{"id": "G25", "cat": "refuse", "text": "Dance on the table.", "expect": [[{"op": "unsupported"}]], "outcome": "refuse"}
+{"id": "G26", "cat": "refuse", "text": "Sing and dance.", "expect": [[{"op": "unsupported"}, {"op": "dance"}]], "outcome": "refuse"}
+{"id": "G27", "cat": "refuse", "text": "Jump, then dance for 10 seconds.", "expect": [[{"op": "unsupported"}, {"op": "dance", "duration_s": 10}]], "outcome": "refuse"}
+{"id": "G28", "cat": "refuse", "text": "Dance while walking forward 2 meters.", "expect": [[{"op": "unsupported"}]], "outcome": "refuse"}
+{"id": "G29", "cat": "refuse", "text": "Breakdance on the floor.", "expect": [[{"op": "unsupported"}]], "outcome": "refuse"}
+{"id": "G30", "cat": "refuse", "text": "Dance with the music for 10 seconds.", "expect": [[{"op": "unsupported"}]], "outcome": "refuse"}

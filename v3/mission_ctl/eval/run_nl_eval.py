@@ -50,7 +50,9 @@ from r1_mission import plan as P     # noqa: E402
 SETS = {"dev": HERE / "nl_dev.jsonl", "test": HERE / "nl_test.jsonl",
         "test2": HERE / "nl_test2.jsonl", "test3": HERE / "nl_test3.jsonl",
         "devobj": HERE / "nl_dev_objects.jsonl", "test4": HERE / "nl_test4.jsonl",
-        "test5": HERE / "nl_test5.jsonl"}
+        "test5": HERE / "nl_test5.jsonl",
+        "devdance": HERE / "nl_dev_dance.jsonl", "test6": HERE / "nl_test6.jsonl",
+        "test7": HERE / "nl_test7.jsonl"}
 # A set written for a policy other than the shipped one carries its envelope here, so
 # --check and the scores use the numbers the set was written for. test5: the v2
 # policy (backward to 0.6 m/s, sideways to 0.5 m/s, turns to 1.57 rad/s).
@@ -68,7 +70,21 @@ SET_ENVELOPE.update({name: _V1 + ("v1 (nl_{}.jsonl, frozen)".format(name),)
 GROUPS = {"heldout": ("test", "test2", "test3"),
           "stageE": ("test", "test2", "test3", "test4"),
           "v2": ("test5",),
-          "all": ("dev", "devobj", "test", "test2", "test3", "test4", "test5")}
+          "dance": ("test6", "test7"),
+          "all": ("dev", "devobj", "test", "test2", "test3", "test4", "test5", "devdance", "test6",
+                  "test7")}
+# V3 dance: a frozen case whose right answer depends on whether the robot can dance.
+# Applied when mission.yaml has dance (and reflex) on; the file itself stays as frozen.
+DANCE_CASES = {
+    "T39": {"expect": [[{"op": "dance"}]], "outcome": "execute"},   # "Dance for me."
+}
+
+
+def with_capabilities(cases, lim):
+    """The cases as THIS config should answer them (DANCE_CASES when it can dance)."""
+    if not (lim.dance and lim.reflex):
+        return cases
+    return [dict(c, **DANCE_CASES[c["id"]]) if c["id"] in DANCE_CASES else c for c in cases]
 TOL_ABS, TOL_REL = 0.02, 0.01
 
 
@@ -185,7 +201,7 @@ def score(case, u, env, lim):
     got_steps = (u.transcript or {}).get("steps") if isinstance(u.transcript, dict) else None
     valid = (isinstance(got_steps, list) and len(got_steps) > 0 and
              all(isinstance(s, dict) and s.get("op") in
-                 ("walk", "turn", "stand", "stop", "unsupported", "turn_to", "walk_to")
+                 ("walk", "turn", "stand", "stop", "unsupported", "turn_to", "walk_to", "dance")
                  for s in got_steps))
     exact = any(steps_equal(got_steps, [dict(s) for s in c]) for c in case["expect"])
     if case["outcome"] == "execute":
@@ -359,7 +375,7 @@ def main(argv=None):
     if args.check:
         rc = 0
         for name, path in sets:
-            cases = load_cases(path)
+            cases = with_capabilities(load_cases(path), lim)
             if name in SET_NEEDS_PERCEPTION and not lim.perception:
                 print("{}: {} cases, sha256 {}, skipped: object steps, and mission.yaml has "
                       "perception off".format(name, len(cases), sha256(path)[:16]))
@@ -378,7 +394,8 @@ def main(argv=None):
     rc = 0
     for model in args.model:
         for name, path in sets:
-            res = run(args, model, load_cases(path), set_envelope(name, env), lim, name, path)
+            res = run(args, model, with_capabilities(load_cases(path), lim), set_envelope(name, env),
+                      lim, name, path)
             if res is None:
                 rc = 3
                 continue

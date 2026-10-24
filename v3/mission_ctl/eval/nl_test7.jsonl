@@ -1,0 +1,10 @@
+{"id": "S01", "cat": "while", "text": "Walk forward 2 meters while turning left.", "expect": [[{"op": "unsupported"}], [{"op": "walk", "direction": "forward", "distance_m": 2}, {"op": "turn", "direction": "left"}]], "outcome": "refuse"}
+{"id": "S02", "cat": "while", "text": "Dance while turning right 90 degrees.", "expect": [[{"op": "unsupported"}], [{"op": "dance"}, {"op": "turn", "direction": "right", "angle_deg": 90}]], "outcome": "refuse"}
+{"id": "S03", "cat": "while", "text": "Turn left 45 degrees and walk 1 meter at the same time.", "expect": [[{"op": "unsupported"}], [{"op": "turn", "direction": "left", "angle_deg": 45}, {"op": "walk", "direction": "forward", "distance_m": 1}]], "outcome": "refuse"}
+{"id": "S04", "cat": "while", "text": "Dance for 10 seconds and walk backward 1 meter simultaneously.", "expect": [[{"op": "unsupported"}], [{"op": "dance", "duration_s": 10}, {"op": "walk", "direction": "backward", "distance_m": 1}]], "outcome": "refuse"}
+{"id": "S05", "cat": "while", "text": "While you dance, walk to the left for 3 seconds.", "expect": [[{"op": "unsupported"}], [{"op": "dance"}, {"op": "walk", "direction": "left", "duration_s": 3}]], "outcome": "refuse"}
+{"id": "S06", "cat": "seq", "text": "Dance for 10 seconds, then walk forward 1 meter.", "expect": [[{"op": "dance", "duration_s": 10}, {"op": "walk", "direction": "forward", "distance_m": 1}]], "outcome": "execute"}
+{"id": "S07", "cat": "seq", "text": "Walk forward 2 meters and then turn left 90 degrees.", "expect": [[{"op": "walk", "direction": "forward", "distance_m": 2}, {"op": "turn", "direction": "left", "angle_deg": 90}]], "outcome": "execute"}
+{"id": "S08", "cat": "seq", "text": "Wait 3 seconds, then dance for 15 seconds.", "expect": [[{"op": "stand", "duration_s": 3}, {"op": "dance", "duration_s": 15}]], "outcome": "execute"}
+{"id": "S09", "cat": "seq", "text": "Turn right 90 degrees, after that dance.", "expect": [[{"op": "turn", "direction": "right", "angle_deg": 90}, {"op": "dance"}]], "outcome": "execute"}
+{"id": "S10", "cat": "seq", "text": "Dance for 20 seconds while I watch.", "expect": [[{"op": "dance", "duration_s": 20}]], "outcome": "execute"}

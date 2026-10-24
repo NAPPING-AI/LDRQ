@@ -102,8 +102,11 @@ _VAGUE = re.compile(r"\b(?:a bit|a little|a little bit|slightly|some more|a bit 
                     r"a smidge|a couple of steps)\b")
 
 # A bare stop never needs a model: it is the one instruction where latency matters.
-FAST_STOP = re.compile(r"^\s*(?:please\s+)?(?:stop|halt|freeze)"
-                       r"(?:\s+(?:now|moving|right\s+now|immediately|please))?[\s.!]*$")
+# V3: so is ending a dance ("stop dancing", "quit dancing now", "end the dance").
+FAST_STOP = re.compile(r"^\s*(?:please\s+)?(?:(?:stop|halt|freeze)"
+                       r"(?:\s+(?:now|moving|right\s+now|immediately|please))?"
+                       r"|(?:stop|quit|end|finish)\s+(?:dancing|the\s+dance|your\s+dance)"
+                       r"(?:\s+(?:now|right\s+now|immediately|please))?)[\s.!]*$")
 
 
 def _fmt(v):
@@ -258,10 +261,11 @@ Step types:
 - walk: direction is forward, backward, left or right. Add distance_m if a distance is given, or duration_s if a time is given, otherwise neither. Add speed_mps only if a speed in m/s is given. Add within_s only for a distance with a time limit, like "2 m in 5 seconds".
 - turn: direction is left or right. Add angle_deg if an angle is given, or duration_s if a time is given, otherwise neither. Add rate_rad_s only if a turn rate in rad/s is given. Add within_s only for an angle with a time limit, like "90 degrees in 3 seconds".
 - stand: stand still or wait. Add duration_s if a time is given.
-- stop: stop moving.
+- dance: dance the robot's own short dance, on the spot. Add duration_s if a time is given.
+- stop: stop moving, or stop dancing.
 - turn_to: turn to face a thing or a person that is named, also said as "look at it", "turn towards it" or "turn around to face it". Copy the words that name it into "object", exactly as written, like "the red chair".
 - walk_to: walk up to a thing or a person that is named. Copy the words that name it into "object" the same way. Add stop_at_m only if a distance to stop from it is given, like "stop 1 m before it" or "2 m away from it".
-- unsupported: anything that is not walking, turning, standing, stopping, turning to something or walking to something, such as jumping, climbing, sitting, picking something up, going to a room or a place, following someone, dancing or talking. Put the request in "what".
+- unsupported: anything that is not walking, turning, standing, stopping, dancing, turning to something or walking to something, such as jumping, climbing, sitting, picking something up, going to a room or a place, following someone or talking. The robot knows one dance only: a dance with a name, a trick, dancing to music or dancing while doing something else is unsupported. Put the request in "what".
 
 Rules:
 - One step per action, in the order given. Write repeated actions out in full ("twice", "three times").
@@ -294,6 +298,12 @@ EXAMPLES = [
     ("stand for 3 seconds and then turn right 180 degrees",
      {"steps": [{"op": "stand", "duration_s": 3},
                 {"op": "turn", "direction": "right", "angle_deg": 180}]}),
+    ("dance for 45 seconds, then wait 2 seconds",
+     {"steps": [{"op": "dance", "duration_s": 45},
+                {"op": "stand", "duration_s": 2}]}),
+    ("do your dance and then climb the stairs",
+     {"steps": [{"op": "dance"},
+                {"op": "unsupported", "what": "climb the stairs"}]}),
     ("walk 1.5 m in 3 seconds, then open the door",
      {"steps": [{"op": "walk", "direction": "forward", "distance_m": 1.5, "within_s": 3},
                 {"op": "unsupported", "what": "open the door"}]}),
@@ -340,6 +350,8 @@ def transcription_schema(lim):
         obj({"op": {"const": "stand"}, "duration_s": num}, ["op", "duration_s"]),
         obj({"op": {"const": "stand"}}, ["op"]),
         obj({"op": {"const": "stop"}}, ["op"]),
+        obj({"op": {"const": "dance"}, "duration_s": num}, ["op", "duration_s"]),
+        obj({"op": {"const": "dance"}}, ["op"]),
         obj({"op": {"const": "turn_to"}, "object": {"type": "string", "maxLength": 60}},
             ["op", "object"]),
         obj({"op": {"const": "walk_to"}, "object": {"type": "string", "maxLength": 60},
@@ -368,7 +380,10 @@ def messages(text):
 # differs, so a prompt edit cannot ship without a re-run. c0c08d6816ca was stage C's
 # (docs/stageC_nl_eval.md); 2bb25e8e2ecc adds turn_to / walk_to, scored 2026-10-14 on the
 # stage C sets and the frozen object set, the model on the CPU (docs/stageE_perception.md).
-EVALUATED_PROMPT_ID = "2bb25e8e2ecc"
+# V3 (2026-10-23): 1b4e65a44dba adds the dance step and its two examples, scored on the
+# frozen dance sets (nl_test6, nl_test7) and on every earlier set, the model on the CPU
+# (v3/README.md; results outputs/llm/eval/v3dance/).
+EVALUATED_PROMPT_ID = "1b4e65a44dba"
 
 
 def prompt_id(lim):
@@ -532,7 +547,14 @@ def make_backend(kind, url, model, timeout_s=120.0, options=None, schema=True):
 # ---------------------------------------------------------------- translate
 REASONS = ("backward", "sideways", "unsupported", "no_amount", "too_fast",
            "too_small", "limits", "invalid", "empty", "unknown_object", "object_order",
-           "no_camera")
+           "no_camera", "too_long", "no_dance", "simultaneous")
+
+# V3: words that ask for two actions at once. The robot does one step after another,
+# and a model that writes "dance while walking" as a dance and then a walk produces a plan
+# that moves, but not as asked (nl_test6 G28, 2026-10-23). Only judged when the
+# transcription has two or more moving steps: "dance while I watch" is one.
+SIMULTANEOUS = re.compile(r"\bwhile\b|\bat the same time\b|\bsimultaneous(?:ly)?\b|"
+                          r"\bmeanwhile\b")
 
 # Slowest walk the NL front end will slow a short walk down to. 0.1 m/s is the
 # slowest command the real robot has walked at (PG-2, 2026-09-28, untethered).
@@ -584,6 +606,9 @@ def step_text(s):
                           if s.get("duration_s") is not None else "")
     if op == "stop":
         return "stop"
+    if op == "dance":
+        return "dance" + (" for {} s".format(f("duration_s"))
+                          if s.get("duration_s") is not None else "")
     if op == "turn_to":
         return "turn to {}".format(s.get("object") or "?")
     if op == "walk_to":
@@ -634,8 +659,15 @@ def refusal_message(reason, env, lim, text, detail=None):
         return ("I cannot move sideways ({}): {}. I can turn 90 degrees and walk "
                 "forward instead.".format(text, why))
     if reason == "unsupported":
-        return ("I cannot {}: I can only walk {}, turn on the spot and stand "
-                "still, one step after another.".format(text, _walk_words(env)))
+        return ("I cannot {}: I can only walk {}, turn on the spot, stand still{}, one "
+                "step after another.".format(text, _walk_words(env),
+                                             " and do my one dance" if lim.dance and lim.reflex
+                                             else ""))
+    if reason == "too_long":
+        return "'{}' is too long: {}.".format(text, detail or "more than I can do")
+    if reason == "no_dance":
+        return ("I cannot {}: dancing is switched off (mission.yaml dance{}).".format(
+            text, "" if lim.reflex else "; it also needs reflex on"))
     if reason == "no_amount":
         return ("'{}' has no amount. Tell me how far (meters), how long (seconds) or "
                 "how many degrees.".format(text))
@@ -658,6 +690,9 @@ def refusal_message(reason, env, lim, text, detail=None):
         return ("I cannot {}: {}.".format(text, detail))
     if reason == "no_camera":
         return "I cannot {}: my camera is switched off (mission.yaml perception).".format(text)
+    if reason == "simultaneous":
+        return ("I cannot do two things at once ({}): I do one step after another. Ask for them "
+                "one after the other.".format(text))
     if reason == "empty":
         return "I did not find anything to do in that."
     return "I could not make sense of '{}'{}.".format(text, ": " + detail if detail else "")
@@ -736,6 +771,23 @@ def translate(transcript, env, lim):
                 refuse(i, s, "unsupported")
             elif op == "stop":
                 steps.append({"op": "stop", "text": text})
+            elif op == "dance":
+                if not (lim.dance and lim.reflex):
+                    refuse(i, s, "no_dance")
+                    continue
+                dur = _num(s, "duration_s")
+                st = {"op": "dance", "text": text}
+                if dur is None:
+                    dur = lim.dance_default_s
+                    st["text"] = "{} ({:.0f} s: you did not say how long)".format(text, dur)
+                if dur < lim.dance_min_s - 1e-9:
+                    refuse(i, s, "too_small", "the shortest dance is {:.0f} s".format(lim.dance_min_s))
+                    continue
+                if dur > lim.dance_max_s + 1e-9:
+                    refuse(i, s, "too_long", "I dance for at most {:.0f} s at a time".format(lim.dance_max_s))
+                    continue
+                st["duration_s"] = dur
+                steps.append(st)
             elif op == "stand":
                 dur = _num(s, "duration_s")
                 if dur is None:
@@ -961,6 +1013,13 @@ def judge(u, env, lim):
     checked, u.invented = drop_invented(u.transcript, u.said)
     checked, unsaid = drop_unsaid_objects(checked, u.said)
     u.invented += unsaid
+    moving = [s for s in (checked.get("steps") or []) if isinstance(checked, dict)
+              and isinstance(s, dict) and s.get("op") in P.MOVING_OPS]
+    if len(moving) >= 2 and SIMULTANEOUS.search(u.normalized.lower()):
+        text = " and ".join(step_text(s) for s in moving)
+        u.steps, u.refusals = [], [{"step": None, "text": text, "reason": "simultaneous",
+                                    "message": refusal_message("simultaneous", env, lim, text)}]
+        return u
     u.steps, u.refusals = translate(checked, env, lim)
     if u.refusals:
         return u
@@ -1084,6 +1143,12 @@ def render_report(rep, prims):
             lines.append("{} Stood still for {:.1f} s.".format(head, t or 0.0))
         elif op == "stop":
             lines.append("{} Stopped.".format(head))
+        elif op == "dance":
+            d = r.get("danced_s")
+            lines.append("{} Did not dance.".format(head) if d is None else
+                         "{} Danced on the spot for {:.1f} s.".format(head, d))
+        if len(lines) < i + 1:          # an op with no sentence of its own
+            lines.append("{} {}.".format(head, r.get("text") or op))
         if r.get("aborted"):
             lines[-1] += " Interrupted: {}.".format(r["aborted"])
     for j in range(len(recs), len(prims)):

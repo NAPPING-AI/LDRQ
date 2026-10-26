@@ -182,7 +182,7 @@ It prints the parsed plan, or the reason it refuses. The plotting and video tool
 the simulation, TensorRT and robot dependencies come from.
 
 **On the robot:** [quickstart/ldrq-v1-quickstart.tar.gz](quickstart/ldrq-v1-quickstart.tar.gz)
-(1.4 MB) is everything v1 runs on the robot: the bridge and policy node as source, built
+(1.5 MB) is everything v1 runs on the robot: the bridge and policy node as source, built
 there; `policy_pack`; `mission_ctl`; the model server's scripts; the v1 policy bundle;
 and a self-test. The language model's runtime and weights (about 1.8 GB) are too large
 for git; the guide says where to get them. [quickstart/make_quickstart.sh](quickstart/make_quickstart.sh)

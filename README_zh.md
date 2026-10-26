@@ -126,7 +126,7 @@ python3 mission_ctl/r1_mission_cli.py capability  # 机器人自述能做什么
 python3 mission_ctl/r1_mission_cli.py run "walk 3s@0.3; turn left 90" --dry-run   # 编译、检查并仿真一个计划
 ```
 
-**在机器人上：** [quickstart/ldrq-v1-quickstart.tar.gz](quickstart/ldrq-v1-quickstart.tar.gz)（1.4 MB）包含 v1 在机器人上运行所需的全部内容：
+**在机器人上：** [quickstart/ldrq-v1-quickstart.tar.gz](quickstart/ldrq-v1-quickstart.tar.gz)（1.5 MB）包含 v1 在机器人上运行所需的全部内容：
 - 硬件桥和策略节点的源码，在机器人上编译；
 - `policy_pack`、`mission_ctl`、模型服务的脚本；
 - v1 策略包；

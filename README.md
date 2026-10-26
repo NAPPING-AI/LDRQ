@@ -10,6 +10,10 @@ robot's own Jetson Orin NX, measured against the simulator, and commanded in Eng
 through a small language model running on the robot. Three versions followed one another.
 Each has its own branch, its own README, a quick-start archive and a robot guide.
 
+**The project's engineering is complete (2026-10-26).** It closed with V3's gantry runs.
+Left out, and stated as limits on the `v3` branch: V3 untethered, obstacles for the reflex,
+and robot trials of the object steps `turn_to` / `walk_to`.
+
 <p align="center">
   <a href="docs/media/ldrq_pitch.mp4"><img src="docs/media/cover.jpg" width="720" alt="LDRQ: LLM-Driven Robotic Query-to-action. The Unitree R1 walking on the real robot, beside its simulation in Isaac Lab"></a>
   <br><em>Click for the 3-minute video (<a href="docs/media/ldrq_pitch.mp4">docs/media/ldrq_pitch.mp4</a>): training, deployment,
@@ -22,7 +26,7 @@ Each has its own branch, its own README, a quick-start archive and a robot guide
 |---|---|---|---|---|---|
 | **`main`** (this one) | **v1** | walks forward (to 1.0 m/s) and turns on the spot (to 0.5 rad/s); English commands through a model on the robot | released as v1.1.0; deployed 2026-10-02 to 10-20 | [ldrq-v1-quickstart.tar.gz](quickstart/ldrq-v1-quickstart.tar.gz) | [ROBOT_GUIDE.md](quickstart/ROBOT_GUIDE.md) |
 | [`v2`](https://github.com/NAPPING-AI/LDRQ/tree/v2) | **v2** | the same, plus walking **backward** and **sideways**, turns to 1.57 rad/s, and no creep on a zero command; the model moves to the CPU; the vision node (stage E) | released as v2.0.0; deployed since 2026-10-20 | `quickstart/ldrq-v2-quickstart.tar.gz` on `v2` | `quickstart/ROBOT_GUIDE.md` on `v2` |
-| [`v3`](https://github.com/NAPPING-AI/LDRQ/tree/v3) | **V3** | v2, plus a **dance** policy that runs beside it, and a **reflex** that hands the robot to v2 to step back when a person comes too close | ran on the robot in the gantry, motors on, 2026-10-24; untethered runs pending | `quickstart/ldrq-v3-quickstart.tar.gz` on `v3` | `quickstart/ROBOT_GUIDE.md` on `v3` |
+| [`v3`](https://github.com/NAPPING-AI/LDRQ/tree/v3) | **V3** | v2, plus a **dance** policy that runs beside it, and a **reflex** that hands the robot to v2 to step back when a person comes too close | validated on the robot in the gantry, motors on, 2026-10-24; released as v3.0.0 | `quickstart/ldrq-v3-quickstart.tar.gz` on `v3`; release [v3.0.0](https://github.com/NAPPING-AI/LDRQ/releases/tag/v3.0.0) | `quickstart/ROBOT_GUIDE.md` on `v3` |
 
 The versions build on each other:
 - **v2** retrains the walking policy on v1's interface (425 inputs → 24 joint targets at

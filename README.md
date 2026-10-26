@@ -30,9 +30,57 @@ through a small language model running on the robot.
 | swapping the policy | **one command**, 8 checked steps; 3/3 bad bundles refused before any change |
 | v2 policy: zero command, simulation | creep **0.45 → 0.14 m per 10 s** (v1 → v2); backward to 0.6 m/s, sideways ±0.5 m/s, turns to 1.4 rad/s, no falls |
 | v2 on the robot | walks **backward and sideways** and holds its place on a zero command; installed by the same one command |
+| V3: a dance and a person reflex, simulation | handing the dancing robot to v2: **0 falls** in 2017 normal and 2044 emergency handovers |
+| V3 on the robot (gantry, motors on) | dances on request, ends on a bar, steps back when a person comes within **0.9 m**, refuses to start with someone within 1 m; both policies **≤ 2.7 ms** per step together (p99) |
 
 The full account is [docs/technical_report.md](docs/technical_report.md); how the work was
 organized and what each step found is [docs/project_history.md](docs/project_history.md).
+
+## Versions
+
+| version | where | what changed | status |
+|---|---|---|---|
+| v1 | release [v1.1.0](https://github.com/kedianwen/LDRQ/releases/tag/v1.1.0) | the W04 walking policy, the robot runtime, the English command layer, one-command policy install | released |
+| v2 | release [v2.0.0](https://github.com/kedianwen/LDRQ/releases/tag/v2.0.0), branch `master` | a retrained walking policy: no creep on a zero command, backward and sideways walking | released, deployed on the robot since 2026-10-20 |
+| V3 | branch `v3`, directory [v3/](v3/README.md) | a second policy that dances, and a reflex that hands the robot to v2 to step back from a person | in development; ran on the robot on the gantry, 2026-10-24 |
+
+**v2: walking that holds still and goes backward** ([docs/v2_policy.md](docs/v2_policy.md)).
+On a zero command, v1 crept forward about 0.45 m every 10 s. Zero was the edge of its
+trained range (forward only), and only 2 % of its training environments ever got a zero
+command. v2 is a two-stage retrain on the same observation and action interface:
+1. The command range is widened to span zero (backward to −0.6 m/s, sideways ±0.5 m/s,
+   turns ±1.57 rad/s), and 15 % of environments get a zero command.
+2. A penalty on the drift (the velocity averaged over about a second) is added only after
+   the gait has formed. Added from the start, it taught the policy to stand still and
+   ignore small commands.
+
+Results in simulation: creep falls to 0.14 m per 10 s; the policy walks backward and
+sideways and turns three times faster than v1, with no falls. v2 passes through the same one-command install as v1 (engine
+built on the Orin, gated by parity). On the robot it walks backward and sideways and holds
+its place on a zero command. Everything above the policy is unchanged, except that the
+command layer reads v2's wider command range.
+
+**V3: a dance, and stepping back from people** ([v3/README.md](v3/README.md)). Two
+policies run side by side in the same process on the Orin, and both are inferred every
+control step:
+- **v2** for walking;
+- **a dance policy** ([v3/models/dance_wave](v3/models/dance_wave/README.md)), trained with
+  BeyondMimic's motion tracking to follow a 10 s routine on the spot.
+
+A state machine in the hardware bridge (the conductor) chooses which policy's output reaches
+the motors:
+- `ask "dance for 20 seconds"` starts a dance only if nobody is within 1 m and the robot
+  has stood still for 1 s;
+- a normal end waits for the end of a bar;
+- if a person comes within 0.9 m of the dancing robot, v2 takes over on the same control
+  step, steps back for 1.5 s (about 0.33 m) and stands until the operator confirms a new
+  plan;
+- the same reflex protects walking and standing, triggering at 0.6 m.
+
+The person's distance comes from the size of their detection box. The head camera's
+depth is filled in up close, so it reports obstacles that are not there. Depth computed
+from the two head images is under way, for obstacles. All V3 code lives under `v3/`, so
+v1 and v2 stay reproducible as released.
 
 ## How it fits together
 
@@ -99,6 +147,7 @@ the simulation, TensorRT and robot dependencies come from.
 | `perception/` | object detection (YOLOX-Nano, TensorRT) for `turn_to` / `walk_to`: the node, calibration and evaluation tools; robot pending | stage E | [perception/README.md](perception/README.md) |
 | `release/` | the robot-side release: install and usage READMEs (English, 中文), the robot self-test, and `make_release.sh`, which builds the release assets from the committed tree | v1.1.0, v2.0.0 | [release/README.md](release/README.md) |
 | `docs/` | results: the technical report, per-stage write-ups, figures, robot evidence | all | [docs/README.md](docs/README.md) |
+| `v3/` | V3, isolated from v1/v2: the dance policy and its training, the two-policy runner and bridge (forks), the proximity reflex, mission_ctl with a `dance` step, robot install and update scripts | V3 | [v3/README.md](v3/README.md) |
 
 The W07 snapshot of the robot's deploy tree (Orin-built binaries and engines, extracted
 to `~/kdw_deploy` on the robot) is a [GitHub Release](https://github.com/kedianwen/LDRQ/releases/tag/orin-snapshot-w07),

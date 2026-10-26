@@ -24,6 +24,7 @@ requirement) are explained in [project_history.md](project_history.md).
 | [stageC_nl_eval.md](stageC_nl_eval.md) | English instructions: choosing the model, the offline eval, results on the robot |
 | [stageD_policy_swap.md](stageD_policy_swap.md) | installing a policy with one command, accepted on the robot |
 | [v2_policy.md](v2_policy.md) | the v2 policy: why v1 crept forward on a zero command, the two-stage retrain, backward and sideways walking, deployed on the robot |
+| [../v3/README.md](../v3/README.md) | **V3** (branch `v3`): a dance policy next to v2, the handover between them, and the reflex that steps back from people; results on the robot (gantry). Summarized in the technical report, §8 |
 | [stageE_perception.md](stageE_perception.md) | seeing objects and walking to them: built and tested on the dev box, robot pending |
 | [int8_waiver.md](int8_waiver.md) | why INT8 quantization was dropped, on three measurements |
 | [pg2_untethered.md](pg2_untethered.md) | evidence for 60 s of walking without the gantry (≥ 79.7 s recorded) |

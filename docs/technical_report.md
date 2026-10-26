@@ -1,6 +1,6 @@
 # Walking a Unitree R1 from Isaac Lab to its onboard Orin NX: a sim2real report, and how much actuator-gain error the policy really tolerates
 
-*LDRQ technical report · 2026-09-29, updated 2026-10-02 with the English command layer and one-command policy install, and 2026-10-20 with the v2 policy · code, data and figures: this repository*
+*LDRQ technical report · 2026-09-29, updated 2026-10-02 with the English command layer and one-command policy install, 2026-10-20 with the v2 policy, and 2026-10-26 with the two version updates (v2, V3; §8) · code, data and figures: this repository*
 
 ## Abstract
 
@@ -24,7 +24,11 @@ Finally, the robot takes English instructions: a 1.7B-parameter model on the sam
 transcribes a sentence into steps, and deterministic code checks them against the trained
 command range before the operator confirms (77/80 on held-out sets on the robot). A
 trained policy installs with one command that builds the engine on the robot and gates
-on numerical parity.
+on numerical parity. Two versions followed the first release (§8). v2 retrains the walking
+policy so that it no longer creeps on a zero command and can walk backward and sideways.
+V3 adds a second policy that dances, plus a reflex. When a person comes too close, the
+reflex hands the robot to v2 on the same control step, and v2 steps back. V3 ran on the
+robot, on the gantry with motors on.
 
 ## 1. Setup
 
@@ -281,9 +285,84 @@ Each one looked like success or like a plausible physical effect.
   on 2026-09-29, for lack of space and a second person, and because the task needs
   neither to any precision. The capability statement says so.
 
+## 8. Two version updates: v2 and V3
+
+| version | where | the change | status |
+|---|---|---|---|
+| v1 | release v1.1.0 | everything in §1–§7 | released |
+| v2 | release v2.0.0 | the walking policy retrained: no creep on a zero command, backward and sideways | released; on the robot since 2026-10-20 |
+| V3 | branch `v3`, directory `v3/` | a dance policy next to v2, and a proximity reflex that hands over to v2 | in development; on the robot (gantry) 2026-10-24 |
+
+### v2: a walking policy that can hold still
+
+§4 tells it; [v2_policy.md](v2_policy.md) has the runs. In short, v1's zero-command
+creep (+0.046 m/s, 0.45 m per 10 s) was a bias of the policy, already present in
+simulation. v2 changes the training and nothing downstream:
+- the command range spans zero (vx −0.6…1.0, vy ±0.5, wz ±1.57);
+- 15 % of envs get a zero command;
+- a penalty on the ~1 s average velocity is added only once the gait exists.
+
+The interface, gains and joint map are v1's. The same one-command install put it on the
+robot, where it walks backward and sideways and holds its place. The lesson that carried
+into V3 is *when* a term is switched on. The same penalty from iteration 0 produced a policy
+that stood still and ignored the small commands `mission_ctl` uses.
+
+### V3: a dance, and stepping back from people
+
+**What it does.** On "dance for 20 seconds" the robot dances a 10 s routine on the spot,
+for 5–60 s, and returns to v2 at the end of a bar. If a person comes within 0.9 m of the
+dancing robot, v2 takes over on that same 20 ms control step: it steps back at −0.3 m/s
+for 1.5 s (about 0.33 m) and then stands until the operator confirms a new plan. The same
+reflex covers walking and standing, triggering at 0.6 m. A dance does not start while
+someone is within 1 m.
+
+**How.**
+- **The dance policy** tracks a reference motion. It was trained with BeyondMimic's
+  whole-body tracking task, vendored unchanged, on v2's robot model and PD gains. The
+  bridge sends one gain set, so both policies must share it.
+- **The runner.** One process holds both TensorRT engines in one CUDA context and infers
+  both every step. v2's observation history therefore stays current, and a handover needs
+  no warm-up.
+- **The conductor.** A state machine in the C++ bridge chooses which output reaches the
+  motors. It matches a Python reference tick for tick on a golden file (4075 + 8450
+  ticks).
+- **The command layer** gained a `dance` step in the LLM's schema. A new deterministic
+  rule refuses "dance while walking" and other requests for two movements at once. On a
+  frozen dance set the score is 28/30 with no unsafe answer.
+
+**Why the person's distance comes from a box.** The head module's depth fills the pixels
+it cannot match with near values. An empty room read "obstacles" at 0.05–0.35 m in every
+frame, and a person 2 m away read 0.6 m. V3 therefore estimates distance from the height
+of the person's detection box, calibrated without a tape measure: a helper at arm's length,
+then one step further. Obstacles stay off. Our own depth from the left and right images is
+under way: the two streams share one clock, and the floor fit recovers the camera's height
+(1.10 m, which is how high the robot was hung). It does not yet pass its other checks.
+
+**Results.**
+
+| check | result |
+|---|---|
+| handover in simulation, ~2000 runs each, kp 1.3 | 0 falls ending at a bar; 0 falls on an emergency handover; stepped back 0.43 m (v2 alone from standing: 0.39 m) |
+| both engines on the Orin | parity 2.3e-05 (v2) and 4.6e-05 (dance); together ≤ 2.7 ms per step at p99 |
+| on the robot, gantry, motors off then on | dances end on a bar; Ctrl-C ends at the next bar; a person at 0.79–0.88 m hands over and the robot steps back; a dance asked for with someone too close is refused; the bridge stayed RUNNING with motors on |
+
+**Silent defects, again.** Two were found only on the robot:
+- The English reply had no sentence for a dance step. It crashed when a dance was
+  interrupted, after the robot had already done the right thing.
+- The dry run's simulated conductor counted bars in its own 10 Hz steps instead of the
+  bridge's 50 Hz ticks, so a dance never ended in simulation.
+
+Both passed every test that existed, because the tests drove the code at 50 Hz and never
+rendered an interrupted dance.
+
+**Not yet.** V3 has not run untethered. It does not stop for objects, only for people.
+The camera looks forward only, so the robot steps back blind. A `joint_target stale`
+degrade occurred once with motors off, shortly after start, and is unexplained.
+
 ## Reproducing
 
-Every figure and table here regenerates from this repository; the deployed policy is in
-`models/week04_nohead/` (checkpoint, TorchScript, ONNX, parity fixture). See
+Every figure and table here regenerates from this repository. The deployed policy is v2
+in `models/v2_drift_ft/` (v1 is `models/week04_nohead/`; the V3 dance policy is
+`v3/models/dance_wave/`), each with checkpoint, TorchScript, ONNX and parity fixture. See
 [README](../README.md#reproducing) for the commands; the stage A figure also redraws
 without Isaac Sim from the two JSON files next to it.

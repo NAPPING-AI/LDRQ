@@ -383,6 +383,7 @@ V3 features in the forks (the bridge and mission_ctl are described above):
 | [perception/tools/stereo_capture.py](perception/tools/stereo_capture.py), [stereo_probe.py](perception/tools/stereo_probe.py), [stereo_unpack.py](perception/tools/stereo_unpack.py) | Record the head cameras' RTP packets on the robot, and take them apart on a dev box: the start of depth computed from the two images |
 | [perception/r1_perception/stereo.py](perception/r1_perception/stereo.py), [perception/tools/stereo_eval.py](perception/tools/stereo_eval.py) | Depth from the two head images (rectify, SGBM, floor fit, corridor) and its checks on recordings |
 | [tools/install_v3.sh](tools/install_v3.sh), [tools/make_robot_package.sh](tools/make_robot_package.sh) | A fresh V3 tree on the robot from the v2 one (read only), with the dance engine built and parity-checked there |
+| [release/](release/README.md) | The V3 robot release: `make_release_v3.sh` (dev box), `install.sh` and `selftest.sh` (robot), its README (English, 中文), release notes and third-party notices |
 | [run_tests.sh](run_tests.sh) | Every V3 check that needs no GPU, ROS or robot (`PYTHON=... v3/run_tests.sh`) |
 
 Status: in development. The dance and the person reflex have run on the robot, hanging, with output off and on (2026-10-24); obstacles wait for depth from the two images.

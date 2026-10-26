@@ -168,7 +168,14 @@ python3 mission_ctl/r1_mission_cli.py run "dance 12s" --dry-run --world mission_
 The C++ checks in `v3/run_tests.sh` need g++ with C++17; the bridge itself builds on a
 dev box against a fake robot (see [v3/README.md](v3/README.md#on-a-dev-box)).
 
-**On the robot:** [quickstart/ldrq-v3-quickstart.tar.gz](quickstart/ldrq-v3-quickstart.tar.gz)
+**On the robot, from the release:** [v3.0.0](https://github.com/NAPPING-AI/LDRQ/releases/tag/v3.0.0)
+(pre-release) has everything in two archives, the language model included, and one install
+script: `install.sh` installs V3 the way the robot was installed on 2026-10-24. Its README
+is [v3/release/README.md](v3/release/README.md) (中文 [README_zh.md](v3/release/README_zh.md)): install,
+every session, commands, acceptance checks, calibration, troubleshooting, rollback.
+`v3/release/make_release_v3.sh` builds it from the committed tree.
+
+**On the robot, from this branch:** [quickstart/ldrq-v3-quickstart.tar.gz](quickstart/ldrq-v3-quickstart.tar.gz)
 (about 17 MB) holds two parts:
 - `base/`, the v2 robot tree: the bridge and policy node as source, `policy_pack`,
   `mission_ctl`, the model server's scripts, the v2 and v1 bundles, and the vision node

@@ -141,7 +141,9 @@ python3 mission_ctl/r1_mission_cli.py run "dance 12s" --dry-run --world mission_
 ```
 `v3/run_tests.sh` 里的 C++ 检查需要支持 C++17 的 g++。硬件桥本身也能在开发机上对着假机器人编译（见 [v3/README.md](v3/README.md#on-a-dev-box)）。
 
-**在机器人上：** [quickstart/ldrq-v3-quickstart.tar.gz](quickstart/ldrq-v3-quickstart.tar.gz)（约 17 MB）分两部分：
+**在机器人上，用 release：** [v3.0.0](https://github.com/NAPPING-AI/LDRQ/releases/tag/v3.0.0)（预发布）把所有内容（包括语言模型）放在两个压缩包里，用一个 `install.sh` 安装，安装方式与 2026-10-24 真机上相同。使用说明见 [v3/release/README_zh.md](v3/release/README_zh.md)（English：[README.md](v3/release/README.md)），包括安装、每次上机、指令、验收检查、标定、故障排查和回滚。`v3/release/make_release_v3.sh` 可以从已提交的代码重新生成它。
+
+**在机器人上，用本分支的快速启动包：** [quickstart/ldrq-v3-quickstart.tar.gz](quickstart/ldrq-v3-quickstart.tar.gz)（约 17 MB）分两部分：
 - `base/`：v2 的机器人目录树，包括硬件桥和策略节点的源码、`policy_pack`、`mission_ctl`、模型服务的脚本、v2 和 v1 的策略包，以及带 YOLOX-Nano 和 parity 夹具的视觉节点；
 - `v3_package/`：由 `v3/tools/make_robot_package.sh` 打包的 V3，带跳舞策略，包括 `install_v3.sh`、按机器人目录结构排好的 V3 代码，以及安装程序要校验的哈希清单。
 

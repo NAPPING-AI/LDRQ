@@ -1,5 +1,11 @@
 # System architecture: the LLM command layer and motion control (2026-09-30)
 
+> **Later additions.** This page describes the system of 2026-09-30, before the camera.
+> The vision module came in stage E ([stageE_perception.md](stageE_perception.md)).
+> V3 added the dance policy, the conductor and the proximity reflex
+> ([../v3/README.md](../v3/README.md)). The current system is drawn in
+> [system_architecture_v3.svg](system_architecture_v3.svg).
+
 **The system in one sentence.** An operator types one English sentence on the robot. A
 local model writes it down as JSON, and deterministic code decides whether and how the
 robot moves. The operator confirms the parsed plan. A 10 Hz executor then steers the 50 Hz
@@ -175,6 +181,7 @@ Follow-up optimization, in the order it would be tried:
 ```bash
 dot -Tsvg docs/system_architecture.dot -o docs/system_architecture.svg
 dot -Tsvg docs/system_logic.dot -o docs/system_logic.svg
+dot -Tsvg docs/system_architecture_v3.dot -o docs/system_architecture_v3.svg
 ```
 
 Graphviz 2.43, as on Ubuntu 20.04. In these files no edge in the same row crosses a

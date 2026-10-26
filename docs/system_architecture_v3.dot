@@ -1,0 +1,73 @@
+// R1 with V3 (branch v3): English instruction, the head camera, and two policies, as run
+// on the robot on 2026-10-24. The v2-era diagram (2026-09-30, no camera) is
+// system_architecture.dot.
+// Render: dot -Tsvg docs/system_architecture_v3.dot -o docs/system_architecture_v3.svg
+//
+// Same conventions as system_architecture.dot: rows fixed with rank=same, flat edges
+// written left to right (dir=back where the data flows the other way), no flat edge
+// across a cluster boundary.
+digraph arch_v3 {
+  graph [rankdir=TB, fontname="DejaVu Sans", fontsize=14, nodesep=0.45, ranksep=0.7,
+         newrank=true, compound=true, pad=0.3,
+         label="R1 system architecture with V3: instruction, camera, two policies (2026-10-24)\n ",
+         labelloc=t];
+  node  [shape=box, style="rounded,filled", fontname="DejaVu Sans", fontsize=11,
+         color="#5f6368", fillcolor="white", margin="0.14,0.07"];
+  edge  [fontname="DejaVu Sans", fontsize=9.5, color="#5f6368", fontcolor="#3c4043"];
+
+  op [label="Operator\nSSH terminal on the robot\nEnglish; confirms every plan", style="rounded,filled,bold"];
+
+  subgraph cluster_mission {
+    label="mission_ctl: r1_mission_cli.py ask (one process per plan)"; style="rounded,filled";
+    fillcolor="#e8f0fe"; color="#8ab4f8";
+    nl   [label="NL front end (nl.py)\nmodel transcribes, code judges;\nsteps: walk, turn, stand,\nturn_to, walk_to, dance"];
+    exe  [label="Executor, 10 Hz\nramps, IMU-closed turns, object steps,\ndance heartbeat, aborts on the reflex,\ntemplate report"];
+  }
+
+  subgraph cluster_llm {
+    label="Model server (llm/)"; style="rounded,filled"; fillcolor="#f3e8fd"; color="#c58af9";
+    oll [label="Ollama, qwen3:1.7b\nCPU, 4 threads\n(the GPU is left to the control loop)"];
+  }
+
+  subgraph cluster_vision {
+    label="Vision: r1_perception (Python)"; style="rounded,filled"; fillcolor="#fff4e5"; color="#f6ae2d";
+    cam  [label="Head stereo module\nleft camera: UDP RTP H264, port 5002\n544 x 448, 10 Hz", fillcolor="#f1f3f4"];
+    det  [label="Decode (gst, Jetson nvv4l2decoder)\nYOLOX-Nano, TensorRT FP16, 3.7 ms\ntracker: hits in a row"];
+    prox [label="Per frame:\nobjects: bearing, range -> turn_to / walk_to\nnearest person: distance from box height\n(person_box_k, calibrated without tape)"];
+  }
+
+  subgraph cluster_stack {
+    label="Control stack (C++, r1_stack.launch.py)"; style="rounded,filled"; fillcolor="#e6f4ea"; color="#81c995";
+    bridge [label="r1_hw_bridge (V3 fork)\nonly writer of rt/lowcmd; PD 500 Hz\nREFLEX: person < 0.6 m (0.9 m dancing)\n-> v2 steps back 1.5 s, then stands\nCONDUCTOR: which policy drives;\ndance ends on a bar; handover same step\nwatchdogs -> DEGRADED (damping)"];
+    runner [label="r1_policy_node (V3 fork), 50 Hz\nboth engines every step, one CUDA context\nv2 walking: 425 obs -> 24 actions\ndance_wave: tracking obs -> 24 actions\n<= 2.7 ms together (p99)"];
+  }
+
+  ll  [label="Unitree low level\nrt/lowstate, rt/lowcmd (CRC)\ndeveloper mode: a single writer", fillcolor="#f1f3f4"];
+  hw  [label="26 joints (24 driven), IMU", fillcolor="#f1f3f4"];
+  gpu [label="Orin GPU (shared)\nv2 + dance engines + YOLOX", shape=box3d, style="filled", fillcolor="#fce8e6", color="#ee675c"];
+
+  { rank=same; op; }
+  { rank=same; exe; nl; oll; }
+  { rank=same; cam; bridge; runner; }
+  { rank=same; det; ll; }
+  { rank=same; prox; hw; gpu; }
+
+  op -> nl [label="English sentence", color="#1a73e8", fontcolor="#1967d2"];
+  exe -> op [ltail=cluster_mission, constraint=false, color="#1a73e8", fontcolor="#1967d2",
+             label="plan + [y/N],\nreply"];
+  exe -> nl [dir=back, label="checked steps\n(after y)"];
+  nl -> oll [dir=both, label="text + JSON schema /\nJSON transcript", color="#a142f4", fontcolor="#7627bb"];
+
+  exe -> bridge [dir=both, label="down: ~/cmd_vel 10 Hz, ~/dance (heartbeat 0.5 s),\n~/reflex_reset\nup: ~/imu, ~/status, ~/reflex (state, cause)",
+                 color="#188038", fontcolor="#137333"];
+  bridge -> runner [dir=both, label="right: ~/obs 91 floats\n(+ IMU quaternion, dance tick)\nleft: both policies' targets", color="#188038", fontcolor="#137333"];
+  bridge -> ll [dir=both, label="rt/lowcmd 500 Hz /\nrt/lowstate", color="#188038", fontcolor="#137333"];
+  ll -> hw [dir=both];
+
+  cam -> det -> prox [color="#e37400"];
+  prox -> bridge [label="/r1_perception/proximity\n(Float64 array, capture time)", color="#e37400", fontcolor="#b06000", constraint=false];
+  prox -> exe [label="/r1_perception/detections\n(JSON: objects, guard)", color="#e37400", fontcolor="#b06000", constraint=false];
+
+  runner -> gpu [style=dashed, color="#ee675c", fontcolor="#c5221f", label="inference"];
+  det -> gpu [style=dashed, color="#ee675c", fontcolor="#c5221f", label="detection"];
+}

@@ -84,13 +84,41 @@ v1 and v2 stay reproducible as released.
 
 ## How it fits together
 
-![System architecture](docs/system_architecture.svg)
+![System architecture with V3](docs/system_architecture_v3.svg)
 
 An English sentence becomes a plan once, before the robot moves: the model only
 transcribes, deterministic code checks the plan against what the policy was trained on,
-and the operator confirms. Below that, the command layer (10 Hz), the policy (50 Hz) and
-the motor loop (500 Hz) each have their own safety checks. Details and the logic diagram:
-[docs/system_architecture.md](docs/system_architecture.md).
+and the operator confirms. Below that, the command layer (10 Hz), the policies (50 Hz) and
+the motor loop (500 Hz) each have their own safety checks. The diagram is the V3 system.
+v2 is the same picture without the dance policy and the conductor
+([v2-era diagram](docs/system_architecture.svg); details and the logic diagram:
+[docs/system_architecture.md](docs/system_architecture.md)).
+
+**Vision** ([perception/](perception/README.md), [docs/stageE_perception.md](docs/stageE_perception.md);
+V3's fork [v3/perception/](v3/perception/README.md)). The R1 EDU has no camera wired to
+the Orin. The head's stereo module streams its images to it over the robot's network.
+The `r1_perception` node works in four steps:
+1. It receives the left camera's H264 stream (UDP RTP, port 5002, 544 × 448, about
+   10 Hz) and decodes it with the Jetson's hardware decoder.
+2. It runs YOLOX-Nano on every frame with a TensorRT FP16 engine built on the Orin: 3.7 ms
+   per frame, with detections identical to FP32's. The detector shares the GPU with the
+   walking policy, and the policy's p99 stays under 0.6 ms with both running.
+3. It confirms a detection only after several hits in a row.
+4. It publishes two topics:
+   - `/r1_perception/detections` (JSON): each object's bearing and range, for the steps
+     `turn_to` ("face the chair") and `walk_to` ("walk to the chair and stop 1.5 m from
+     it"), and a guard that stops a walk when someone is close or the camera goes quiet;
+   - `/r1_perception/proximity`, which V3's reflex acts on.
+
+A person's distance comes from the height of their detection box. That ratio is
+calibrated without a tape measure: a helper stands at arm's length, then one step further.
+The module's own depth cannot be used up close: it fills the pixels it cannot match with
+near values. Depth computed from the left and right images is in development.
+
+Status:
+- the person reflex runs on the robot (V3, 2026-10-24);
+- the engine, parity and coexistence with the policy passed on the robot;
+- `turn_to` and `walk_to` are tested on the dev box, and their robot runs are pending.
 
 ## Quick start
 
@@ -144,7 +172,7 @@ the simulation, TensorRT and robot dependencies come from.
 | `policy_pack/` | swap the deployed policy with one command: bundle on the dev box, eight checked install steps on the robot | stage D | [policy_pack/README.md](policy_pack/README.md) |
 | `mission_ctl/` | the command layer: time / angle / speed plans over the bridge's topics, IMU-closed turns, `ask` for English, and its offline eval | stages B–C | [mission_ctl/README.md](mission_ctl/README.md) |
 | `llm/` | the model server on the robot: Ollama for JetPack 5, health checks, the control-loop coexistence test | stage C | [llm/README.md](llm/README.md) |
-| `perception/` | object detection (YOLOX-Nano, TensorRT) for `turn_to` / `walk_to`: the node, calibration and evaluation tools; robot pending | stage E | [perception/README.md](perception/README.md) |
+| `perception/` | vision: the head camera's stream, object detection (YOLOX-Nano, TensorRT FP16) for `turn_to` / `walk_to`, the node, calibration and evaluation tools; engine and coexistence passed on the robot, the two steps pending there | stage E | [perception/README.md](perception/README.md) |
 | `release/` | the robot-side release: install and usage READMEs (English, 中文), the robot self-test, and `make_release.sh`, which builds the release assets from the committed tree | v1.1.0, v2.0.0 | [release/README.md](release/README.md) |
 | `docs/` | results: the technical report, per-stage write-ups, figures, robot evidence | all | [docs/README.md](docs/README.md) |
 | `v3/` | V3, isolated from v1/v2: the dance policy and its training, the two-policy runner and bridge (forks), the proximity reflex, mission_ctl with a `dance` step, robot install and update scripts | V3 | [v3/README.md](v3/README.md) |
@@ -199,7 +227,7 @@ output (each script prints `[ok]` lines or writes its report), not the exit code
 |---|---|---|
 | unit tests: command layer, policy packaging, model checksums | none | `./run_tests.sh` |
 | stage A figure, from the committed data | none (matplotlib) | `python3 scripts/plot_gain_sweep.py --sim docs/stageA_kp_sweep_sim.json --real docs/stageA_kp_sweep_real.json --out docs/stageA_kp_sweep.png` |
-| training config still matches the deployed run | GPU | `~/IsaacLab/isaaclab.sh -p scripts/verify_repro.py --headless --run 2026-08-19_11-03-32_week04_nohead` |
+| training config still matches v1's run | GPU | `~/IsaacLab/isaaclab.sh -p scripts/verify_repro.py --headless --run 2026-08-19_11-03-32_week04_nohead` |
 | speed-tracking table (PG-1) | GPU | `~/IsaacLab/isaaclab.sh -p scripts/eval_baseline.py --headless --num_envs 64 --checkpoint models/week04_nohead/model_2999.pt` |
 | simulated half of the `kp_scale` sweep | GPU (~3 min) | `~/IsaacLab/isaaclab.sh -p scripts/sweep_gain_robustness.py --headless` |
 | simulation clip for the demo | GPU | `~/IsaacLab/isaaclab.sh -p scripts/record_demo_sim.py --headless --out outputs/demo/sim_sequence.mp4` |

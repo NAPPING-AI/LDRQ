@@ -62,7 +62,9 @@
 
 ## 系统架构
 
-![系统架构](docs/system_architecture.svg)
+![系统架构（含 V3）](docs/system_architecture_v3.svg)
+
+上图是 V3 的系统。v2 的系统就是去掉舞蹈策略和指挥器之后的样子（[v2 时期的架构图](docs/system_architecture.svg)）。
 
 一句英文指令只在机器人动之前被转换成计划，一共三步：
 
@@ -71,6 +73,22 @@
 3. 操作者确认后机器人才执行。
 
 计划下方还有三层，按各自的频率运行，各带安全检查：指令层 10 Hz、策略 50 Hz、电机回路 500 Hz。详细的数据流和逻辑图见 [docs/system_architecture.md](docs/system_architecture.md)。
+
+**视觉模块**（[perception/](perception/README.md)，[docs/stageE_perception.md](docs/stageE_perception.md)；V3 的分叉 [v3/perception/](v3/perception/README.md)）。R1 EDU 的 Orin 上没有直接接相机，头部的双目模组通过机器人内部网络把画面推给 Orin。`r1_perception` 节点分四步工作：
+
+1. 接收左目的 H264 视频流（UDP RTP，端口 5002，544×448，约 10 Hz），用 Jetson 的硬件解码器解码；
+2. 每一帧用 YOLOX-Nano 做目标检测。引擎是在 Orin 上建的 TensorRT FP16：每帧 3.7 ms，检测结果和 FP32 一致。检测器和行走策略共用 GPU，两者同时运行时策略推理的 p99 仍在 0.6 ms 以内；
+3. 同一目标要连续几帧都检测到才算确认；
+4. 发布两个话题：
+   - `/r1_perception/detections`（JSON）：每个物体的方位和距离，供 `turn_to`（"转向椅子"）和 `walk_to`（"走到椅子前 1.5 m 停下"）使用；另外，有人靠近或相机没有画面时，会让正在走的步骤停下；
+   - `/r1_perception/proximity`：V3 的近距后退反射看的就是它。
+
+人的距离按检测框的高度估计，这个比例不用卷尺标定：帮手先站在一臂远处，再往后退一步，各拍一次。模组自带的深度在近处不能用，它会把匹配不上的像素填成近距离。用左右两目自己计算深度的工作还在进行中。
+
+现状：
+- 近距后退反射已在真机上运行（V3，2026-10-24）；
+- 检测引擎、parity、与策略共用 GPU 的测试都已在真机通过；
+- `turn_to` / `walk_to` 已在开发机上测试，真机测试还没做。
 
 ## 亮点
 

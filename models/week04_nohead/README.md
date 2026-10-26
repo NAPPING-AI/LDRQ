@@ -1,6 +1,8 @@
-# The deployed policy: `2026-08-19_11-03-32_week04_nohead`
+# v1, the deployed policy until 2026-10-20: `2026-08-19_11-03-32_week04_nohead`
 
-The policy that walks on the robot, kept in git so that a fresh clone can evaluate,
+> Since 2026-10-20 the robot runs v2 ([../v2_drift_ft/README.md](../v2_drift_ft/README.md)). This page is kept as v1's record.
+
+The policy that walked on the robot until v2, kept in git so that a fresh clone can evaluate,
 deploy and re-run every figure without retraining (training logs under `logs/` are not
 tracked: checkpoints and tensorboard events for all runs are several GB).
 

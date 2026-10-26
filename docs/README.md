@@ -25,7 +25,7 @@ requirement) are explained in [project_history.md](project_history.md).
 | [stageD_policy_swap.md](stageD_policy_swap.md) | installing a policy with one command, accepted on the robot |
 | [v2_policy.md](v2_policy.md) | the v2 policy: why v1 crept forward on a zero command, the two-stage retrain, backward and sideways walking, deployed on the robot |
 | [../v3/README.md](../v3/README.md) | **V3** (branch `v3`): a dance policy next to v2, the handover between them, and the reflex that steps back from people; results on the robot (gantry). Summarized in the technical report, §8 |
-| [stageE_perception.md](stageE_perception.md) | seeing objects and walking to them: built and tested on the dev box, robot pending |
+| [stageE_perception.md](stageE_perception.md) | seeing objects and walking to them: the camera stream, the detector on the Orin (engine, parity and coexistence passed on the robot); `turn_to` / `walk_to` tested on the dev box, robot runs pending |
 | [int8_waiver.md](int8_waiver.md) | why INT8 quantization was dropped, on three measurements |
 | [pg2_untethered.md](pg2_untethered.md) | evidence for 60 s of walking without the gantry (≥ 79.7 s recorded) |
 | **simulation checks** | |
@@ -35,7 +35,8 @@ requirement) are explained in [project_history.md](project_history.md).
 | `stageA_kp_sweep.png`, `stageA_kp_sweep_wide.png` | the headline figure; the wide one is for slides |
 | `stageA_kp_sweep_sim.json`, `stageA_kp_sweep_real.json` | the data behind it: the figure redraws from these two files alone |
 | `m1_dr_robustness.png`, `m1_training_curves.png` | the training milestone: tracking error with and without randomization; reward curves |
-| `system_architecture.{dot,svg}`, `system_logic.{dot,svg}` | the two diagrams (Graphviz) |
+| `system_architecture_v3.{dot,svg}` | the current system (V3): the camera, the two policies, the conductor and the reflex (Graphviz) |
+| `system_architecture.{dot,svg}`, `system_logic.{dot,svg}` | the v2-era diagrams (2026-09-30, before the camera; Graphviz) |
 | `r1_standing.png` | R1 standing under joint PD alone, W02 (with gains stiffer than the hardware's) |
 | `media/ldrq_pitch.mp4`, `media/cover.jpg` | the project video (3 min, 720p) and its cover, used on the front page |
 | `w07_walk_push_recovery.mp4`, `media/walk_push_recovery.gif` | the real robot walking and recovering from pushes, under a slack gantry |

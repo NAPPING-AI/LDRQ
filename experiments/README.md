@@ -19,7 +19,7 @@ Each folder's `NOTES.md` is the original lab note, in Chinese. In one line each:
 | `2026-08-15_17-34-57_touchdown_gate` | `feet_air_time_positive_biped` removed (standing on one leg maximizes it); reward paid at touchdown for a 0.15–0.45 s swing; penalty for a foot held up | **the first alternating gait** |
 | `2026-08-17_17-38-37_week04_dr` | 5-frame observation history, five-item domain randomization, commands to 1.0 m/s and turning, curriculum | PG-1 passed (worst 0.084 m/s), but ankle torques beyond the real robot's rating |
 | `2026-08-18_15-33-21_week04_hwspec` | actuator limits and gains corrected to the URDF / Unitree spec | every metric improved at once (worst 0.050 m/s); new defect: the head pitched up to its joint limit |
-| `2026-08-19_11-03-32_week04_nohead` | head removed from the action space: **24-dim action, 425-dim observation** | **the deployed policy**: worst 0.037 m/s, 0.076 under friction 0.6 + pushes; copied to [`models/week04_nohead/`](../models/week04_nohead/) |
+| `2026-08-19_11-03-32_week04_nohead` | head removed from the action space: **24-dim action, 425-dim observation** | **v1, the deployed policy until 2026-10-20** (then v2): worst 0.037 m/s, 0.076 under friction 0.6 + pushes; copied to [`models/week04_nohead/`](../models/week04_nohead/) |
 
 PG-1 is the training gate: forward-speed tracking error ≤ 0.15 m/s over 0.5–1.0 m/s in
 simulation.

@@ -84,11 +84,15 @@ The checklist with the evidence for each row is [docs/dod.md](dod.md).
 
 ## Status by stage
 
-**The 12-week scope and all four stages are closed (stage D on 2026-10-02).** All videos
-are recorded at the end of the project. Stage E (vision) was added on 2026-10-14 and is
-open: built and tested on the dev box, not yet run on the robot. The v2 policy (backward,
-sideways, no creep on a zero command) was trained, deployed and released as v2.0.0 on
-2026-10-20.
+**The project's engineering is closed (2026-10-26).** The 12-week scope and all four
+stages closed by 2026-10-02 (release v1.1.0). Three additions followed, each on the robot:
+- stage E (vision), added on 2026-10-14;
+- the v2 policy (backward, sideways, no creep on a zero command), released as v2.0.0 on
+  2026-10-20;
+- V3 (a dance policy and a person reflex), run in the gantry with the motors on on
+  2026-10-24, released as v3.0.0.
+
+What was left out at the close is listed under each of them below.
 
 | Milestone | Span | Verdict |
 |---|---|---|
@@ -120,17 +124,25 @@ sideways, no creep on a zero command) was trained, deployed and released as v2.0
 
 **Outcome.** **done** 2026-10-02. Regression install of the running policy: 8/8 steps, parity 1.144e-05 before and after, only the expected four files changed (`bridge.yaml` and the joint map byte-identical), same in-loop inference time (p50 ~454 µs, clocks locked); three bad bundles refused at step 1 with the deploy tree untouched; the stack walked on the new engine. The plan's "engine fingerprint reproduces" criterion was wrong — TensorRT rebuilds are not byte-identical — and parity is the gate ([docs/stageD_policy_swap.md](stageD_policy_swap.md))
 
-### Stage E: seeing objects and walking to them (open)
+### Stage E: seeing objects and walking to them (closed)
 
 **Goal.** A YOLOX-Nano detector on the Orin NX beside the policy, and `turn_to` / `walk_to` in the command layer. Acceptance: policy inference p99 ≤ 2 ms with the detector running, detection precision and person recall on ~100 robot images, AprilTag-checked bearing and depth, 10 trials of each primitive on the robot. The language model moves to 4 CPU threads (user, 2026-10-14)
 
 **Outcome so far.** Built and tested on the dev box. The engine passes the walking policy's own parity gate (FP32 3.8e-04; FP16 gated on detections, which are identical). The node runs at 12.4 Hz under ROS 2. The new English prompt was scored with the model on the CPU: 20/20 on a frozen object set, and the stage C sets unchanged by outcome. The trial protocol in simulation: 10/10 each. The head camera itself is not characterized yet; the robot steps are listed in [docs/stageE_perception.md](stageE_perception.md)
+
+**At the close (2026-10-26).** On the robot: the FP16 engine and its gate, coexistence with the policy and the model, and the head camera's stream, which V3's person reflex used in every gantry run. Not run on the robot, and left out: the 10 + 10 trials of `turn_to` and `walk_to`, the image calibration of the thresholds, and the AprilTag check
 
 ### v2 policy: backward, sideways, no creep on a zero command
 
 **Goal.** v1 crept forward on a zero command. Retrain on the same task with lin_vel_x (−0.6, 1.0), lin_vel_y (−0.5, 0.5), ang_vel_z (−1.57, 1.57), heading control on, stepping in place on a zero command without the creep (user, 2026-10-16). Then export, the bridge configuration, the English command layer, and a release (user, 2026-10-20)
 
 **Outcome.** **done** 2026-10-20. The creep was a bias of v1 itself, already in simulation (+0.046 m/s, identical in every env). v2 is two training stages, because a drift penalty switched on from the start taught the robot to stand still and ignore small commands. In simulation v2 creeps at +0.014 m/s and tracks −0.6 m/s backward, ±0.5 m/s sideways and up to 1.4 rad/s turns, with no falls. It installed with `policy_pack`, the first new policy through it; the bridge's range came from the bundle, with no C++ change. `mission_ctl` walks in four directions where the installed envelope allows them; the prompt is unchanged; 19/20 on a new frozen set. On the robot it walked backward and sideways and held its place on a zero command (operator's report). Released as v2.0.0 ([docs/v2_policy.md](v2_policy.md))
+
+### V3: a dance, and stepping back from people
+
+**Goal.** A second policy that dances on the spot next to v2, and a reflex in the bridge that hands the robot to v2 to step back when a person comes too close (user, 2026-10-22/23)
+
+**Outcome.** **done** 2026-10-26. A reference state machine and conductor in Python, ported to the bridge in C++ and matched tick for tick; the dance policy trained with BeyondMimic's tracking; both policies in one runner; 0 falls in 2017 normal and 2044 emergency handovers in simulation. The head camera's depth proved unusable close up, so a person's distance comes from the box height, calibrated without tape. On the robot (2026-10-24, gantry, output off and then motors on): both engines at most 2.7 ms per step together (p99), the dance ending on a bar, Ctrl-C, handover and retreat at 0.79–0.88 m, refusal with someone close, RUNNING throughout. Released as v3.0.0. Left out at the close: untethered runs, obstacles (depth from the two images, started and not finished), and one unexplained `joint_target stale` ([v3/README.md](../v3/README.md))
 
 ## What each week produced, and what was not obvious
 

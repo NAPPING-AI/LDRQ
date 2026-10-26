@@ -43,15 +43,16 @@ For the operator, `ask "dance for 20 seconds"`:
 - hands the robot to v2 to step back if someone comes close;
 - `stop dancing` or Ctrl-C ends it at the next bar.
 
-**Status.** On 2026-10-24 V3 ran on the robot in the gantry, first with the output off, then
-with the motors on. The bridge stayed RUNNING throughout. The robot danced and handed back
-to v2 at the end of a bar, stopped at the next bar on Ctrl-C, and stepped back from the
-dance when a person came within 0.79–0.88 m. A dance asked for with someone too close was
-refused. Still to do:
-- untethered runs (R4);
-- the reflex acts on people only: obstacles wait for depth computed from the two head
-  images;
-- one `DEGRADED: joint_target stale` seen with the output off is not explained yet.
+**Status: complete.** On 2026-10-24 V3 ran on the robot in the gantry, first with the
+output off, then with the motors on. The bridge stayed RUNNING throughout. The robot danced
+and handed back to v2 at the end of a bar, stopped at the next bar on Ctrl-C, and stepped
+back from the dance when a person came within 0.79–0.88 m. A dance asked for with someone
+too close was refused. These gantry runs completed V3, and with it the project's
+engineering (2026-10-26). Left out, and known limits of what was delivered:
+- V3 has run in the gantry only, never untethered;
+- the reflex acts on people only: obstacles would need depth computed from the two head
+  images, which was started on the dev box and not finished;
+- one `DEGRADED: joint_target stale`, seen once with the output off, was not explained.
 
 All V3 code lives under [v3/](v3/README.md), whose README is the detailed account.
 
@@ -97,7 +98,8 @@ The `r1_perception` node works in four steps:
 A person's distance comes from the height of their detection box. That ratio is
 calibrated without a tape measure: a helper stands at arm's length, then one step further.
 The module's own depth cannot be used up close: it fills the pixels it cannot match with
-near values. Depth computed from the left and right images is in development.
+near values. Depth computed from the left and right images was started on the dev box and
+not finished.
 
 ### Development order
 
@@ -113,8 +115,8 @@ near values. Depth computed from the left and right images is in development.
 | robot install | 10-24 | `install_v3.sh` makes `~/r1-robot-v3` from the v2 tree; both engines built and gated on the Orin | parity v2 2.3e-05, dance 4.6e-05 |
 | robot, output off | 10-24 | two engines' timing, the dance, a person walking up, refusals | ≤ 2.7 ms per step together (p99); handover on the same step |
 | robot, motors on (gantry) | 10-24 | the dance, Ctrl-C, a person walking up, refusal | RUNNING throughout; stepped back at 0.79–0.88 m |
-| fixes | 10-24 to 10-26 | the reply for a dance step; the dry run's bridge stepped at 50 Hz; depth from the two images (dev box, in progress) | — |
-| next | — | untethered runs (R4); obstacles from the two-image depth | — |
+| fixes | 10-24 to 10-26 | the reply for a dance step; the dry run's bridge stepped at 50 Hz; depth from the two images (dev box, started, not finished) | — |
+| close | 10-26 | the gantry runs accepted as the end of the engineering work; release v3.0.0 | project complete |
 
 ### Key parameters
 
@@ -169,7 +171,7 @@ The C++ checks in `v3/run_tests.sh` need g++ with C++17; the bridge itself build
 dev box against a fake robot (see [v3/README.md](v3/README.md#on-a-dev-box)).
 
 **On the robot, from the release:** [v3.0.0](https://github.com/NAPPING-AI/LDRQ/releases/tag/v3.0.0)
-(pre-release) has everything in two archives, the language model included, and one install
+has everything in two archives, the language model included, and one install
 script: `install.sh` installs V3 the way the robot was installed on 2026-10-24. Its README
 is [v3/release/README.md](v3/release/README.md) (中文 [README_zh.md](v3/release/README_zh.md)): install,
 every session, commands, acceptance checks, calibration, troubleshooting, rollback.
@@ -390,7 +392,8 @@ both toolchains working from one tree; see `deploy/README.md`.
 ## Project history
 
 The work ran as a 12-week plan (weeks **W01–W08**, then four **stages A–D** in place of
-W09–W12) in three milestones, followed by stage E (vision, open) and the v2 policy, with pass/fail gates such as **PG-2** and requirements such
+W09–W12) in three milestones, followed by stage E (vision), the v2 policy and V3 (a dance and the person reflex); the
+engineering closed on 2026-10-26. The plan used pass/fail gates such as **PG-2** and requirements such
 as **FR-Q3**. Those labels appear in commits and documents; all of them, the timeline, the
 status of each stage and the finding from each week that no metric showed are in
 [docs/project_history.md](docs/project_history.md). The definition-of-done checklist with

@@ -19,8 +19,9 @@ Everything v2 does still works:
 Source, design notes and results: <https://github.com/NAPPING-AI/LDRQ>, branch `v3`
 (`v3/README.md` is the detailed account).
 
-> **Status: pre-release.** V3 has run on the robot **in a gantry only**, with the output off
-> and with the motors on (2026-10-24). It has not run untethered. The reflex acts on
+> **Status: final release, validated in the gantry.** V3 ran on the robot in a gantry, with
+> the output off and with the motors on (2026-10-24), and that completed the project's
+> engineering. It has **never run untethered**: keep it in the gantry. The reflex acts on
 > **people only**, not on objects. The camera looks forward only, so the robot backs off
 > into space it cannot see.
 >
@@ -366,8 +367,8 @@ act on.
 ## Safety
 
 - **The emergency stop is in the operator's hand** whenever the motors are on.
-- **Gantry only.** V3 has not been run untethered. Do not take it off the gantry before
-  the untethered checks have been written and passed.
+- **Gantry only.** V3 was validated in the gantry and has never run untethered; untethered
+  running was not part of the project. Do not take it off the gantry.
 - **The robot backs off into space it cannot see.** Keep 1 m clear behind it.
 - **People only.** The reflex does not see objects (the camera's depth is unreliable up
   close). An operator watches for obstacles.

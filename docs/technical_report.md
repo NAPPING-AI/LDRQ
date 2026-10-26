@@ -1,6 +1,6 @@
 # Walking a Unitree R1 from Isaac Lab to its onboard Orin NX: a sim2real report, and how much actuator-gain error the policy really tolerates
 
-*LDRQ technical report · 2026-09-29, updated 2026-10-02 with the English command layer and one-command policy install, 2026-10-20 with the v2 policy, and 2026-10-26 with the two version updates (v2, V3; §8) · code, data and figures: this repository*
+*LDRQ technical report · 2026-09-29, updated 2026-10-02 with the English command layer and one-command policy install, 2026-10-20 with the v2 policy, and 2026-10-26 with the two version updates (v2, V3; §8), at the close of the project's engineering · code, data and figures: this repository*
 
 ## Abstract
 
@@ -291,7 +291,7 @@ Each one looked like success or like a plausible physical effect.
 |---|---|---|---|
 | v1 | release v1.1.0 | everything in §1–§7 | released |
 | v2 | release v2.0.0 | the walking policy retrained: no creep on a zero command, backward and sideways | released; on the robot since 2026-10-20 |
-| V3 | branch `v3`, directory `v3/` | a dance policy next to v2, and a proximity reflex that hands over to v2 | in development; on the robot (gantry) 2026-10-24 |
+| V3 | branch `v3`, directory `v3/` | a dance policy next to v2, and a proximity reflex that hands over to v2 | complete: on the robot in the gantry, motors on, 2026-10-24; release v3.0.0 |
 
 ### v2: a walking policy that can hold still
 
@@ -355,9 +355,11 @@ under way: the two streams share one clock, and the floor fit recovers the camer
 Both passed every test that existed, because the tests drove the code at 50 Hz and never
 rendered an interrupted dance.
 
-**Not yet.** V3 has not run untethered. It does not stop for objects, only for people.
-The camera looks forward only, so the robot steps back blind. A `joint_target stale`
-degrade occurred once with motors off, shortly after start, and is unexplained.
+**Left out at the close.** The project's engineering closed on 2026-10-26 with these gantry
+runs. V3 has not run untethered. It does not stop for objects, only for people: depth from
+the two head images was started and not finished. The camera looks forward only, so the
+robot steps back blind. A `joint_target stale` degrade occurred once with motors off,
+shortly after start, and was not explained.
 
 ## Reproducing
 

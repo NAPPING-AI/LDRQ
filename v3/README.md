@@ -1,4 +1,4 @@
-# V3: a dance, and a proximity reflex (in progress)
+# V3: a dance, and a proximity reflex
 
 V3 backs the robot off about 0.33 m when a person comes within 0.6 m or an obstacle
 within 0.45 m, then holds it stepping in place until the operator confirms a new plan.
@@ -386,4 +386,4 @@ V3 features in the forks (the bridge and mission_ctl are described above):
 | [release/](release/README.md) | The V3 robot release: `make_release_v3.sh` (dev box), `install.sh` and `selftest.sh` (robot), its README (English, 中文), release notes and third-party notices |
 | [run_tests.sh](run_tests.sh) | Every V3 check that needs no GPU, ROS or robot (`PYTHON=... v3/run_tests.sh`) |
 
-Status: in development. The dance and the person reflex have run on the robot, hanging, with output off and on (2026-10-24); obstacles wait for depth from the two images.
+Status: complete (2026-10-26). The dance and the person reflex ran on the robot, hanging, with output off and on (2026-10-24), and those runs closed the project's engineering. Not done: untethered runs, and obstacles (depth from the two images was started and not finished).

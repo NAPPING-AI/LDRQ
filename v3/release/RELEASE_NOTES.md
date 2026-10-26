@@ -1,7 +1,8 @@
 # r1-robot v@VERSION@ (V3): a dance, and stepping back from people
 
-**Pre-release.** V3 has run on the robot in a gantry, with the output off and with the motors
-on (2026-10-24). It has not run untethered yet.
+**Final release of the project.** V3 ran on the robot in a gantry, with the output off and
+with the motors on (2026-10-24); that completed the project's engineering (2026-10-26). It
+was validated in the gantry only and has never run untethered.
 
 - **A dance policy** (`dance_wave`, run `2026-10-23_16-51-44_wave`, trained with BeyondMimic's
   motion tracking): a 10 s routine on the spot, both feet on the floor.
@@ -32,8 +33,8 @@ on (2026-10-24). It has not run untethered yet.
 **In simulation:** 0 falls in 2017 normal and 2044 emergency handovers.
 
 **Known limits:**
-- not yet run untethered;
-- the reflex acts on people only: obstacles wait for depth from the two head images;
+- validated in the gantry only, never untethered: keep it in the gantry;
+- the reflex acts on people only: obstacles would need depth from the two head images, which was not finished;
 - the camera looks forward only, so the robot backs off into space it cannot see;
 - one `DEGRADED: joint_target stale` was seen once with the output off; a restart cleared it.
 

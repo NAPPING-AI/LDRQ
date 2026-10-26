@@ -134,7 +134,8 @@ It prints `[n/5]` for each step, and any failure stops it. The log is
   - `perception.yaml` gains `proximity_*` and `person_box_*`;
   - `bridge.yaml` gains the `reflex_*` block.
 
-  Any other `<` line is a local change in `base/`: copy it into the file in `v3/` by hand.
+  The one expected `<` line is the old `obj_stop_min_m: 0.8`. Any other `<` line is a local
+  change in `base/`: copy it into the file in `v3/` by hand.
 - The engine fingerprints differ from build to build: TensorRT picks kernels by timing them.
   Parity is what proves the numbers.
 

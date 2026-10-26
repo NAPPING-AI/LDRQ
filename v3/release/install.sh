@@ -68,7 +68,7 @@ PM="$BASE/perception/models"
 if [[ -f "$PM/yolox_fp16.plan" ]]; then
   echo "  yolox_fp16.plan exists; not rebuilt"
 else
-  in_base bash -c '"$R1_DEPLOY_ROOT/ros2_ws/install/r1_policy_runner/lib/r1_policy_runner/r1_build_engine" \
+  in_base bash -c 'set -o pipefail; "$R1_DEPLOY_ROOT/ros2_ws/install/r1_policy_runner/lib/r1_policy_runner/r1_build_engine" \
       --onnx "$0/yolox_nano.onnx" --plan "$0/yolox_fp16.plan" --fp16 | tail -2' "$PM" \
     || { rm -f "$PM/yolox_fp16.plan"; die "the YOLOX engine did not build"; }
 fi

@@ -114,7 +114,7 @@ bash ~/r1-robot-v3.0.0/install.sh
   - `perception.yaml` 新增 `proximity_*` 和 `person_box_*`；
   - `bridge.yaml` 新增 `reflex_*` 一整段。
 
-  出现其他以 `<` 开头的行，说明 `base/` 里有本地改动，要手动抄进 `v3/` 里对应的文件。
+  唯一预期的 `<` 行是旧的 `obj_stop_min_m: 0.8`。出现其他以 `<` 开头的行，说明 `base/` 里有本地改动，要手动抄进 `v3/` 里对应的文件。
 - 引擎指纹每次构建都不一样（TensorRT 靠计时挑选 kernel），这是正常的；数值对不对以 parity 为准。
 
 ## 每次上机

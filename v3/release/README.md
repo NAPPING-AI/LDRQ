@@ -103,7 +103,10 @@ bash ~/r1-robot-v3.0.0/selftest.sh             # every line "ok"; moves nothing
   included), the dance observation, the vision code, the command layer and three dry runs.
 
 Lines marked `warn` are about the robot's system (JetPack, ROS, unitree_sdk2, TensorRT).
-They do not fail the test, but the install needs all four.
+They do not fail the test, but the install needs all four. Once `install.sh` has installed
+the v2 policy into `base/`, `selftest.sh` checks only `base/`'s files, model and runtime:
+v2's own English tests judge eval sets frozen under v1's command range, and would report
+v2's backward and sideways walks as errors. V3's tests still run.
 
 **3. Install (about 15 minutes; most of it builds engines).** Use a **new terminal that has
 not sourced any `env.sh`**:

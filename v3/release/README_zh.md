@@ -91,6 +91,8 @@ bash ~/r1-robot-v3.0.0/selftest.sh             # 每一行都应是 "ok"；机�
 
 标为 `warn` 的行是关于机器人系统的（JetPack、ROS、unitree_sdk2、TensorRT）。它们不算自检失败，但安装时这四样都必须有。
 
+`install.sh` 把 v2 策略装进 `base/` 之后，`selftest.sh` 对 `base/` 只检查文件、模型和运行时。原因是 v2 自带的英文测试用的是按 v1 速度范围冻结的评测集，会把 v2 的后退和横移报成错误。V3 自己的测试照常运行。
+
 **3. 安装（约 15 分钟，大部分时间在构建引擎）。** 开一个**没有 source 过任何 `env.sh` 的新终端**：
 ```bash
 bash ~/r1-robot-v3.0.0/install.sh

@@ -19,8 +19,20 @@ if sha256sum --quiet -c FILES.sha256 2>/dev/null; then ok "release files match F
 else bad "release files differ from FILES.sha256 (copied as zip, or edited?)"; fi
 
 echo "== base/ (the v2 tree)"
-bash base/selftest.sh | sed -n '2,$p' | grep -v '^selftest:'
-[[ ${PIPESTATUS[0]} -eq 0 ]] || fail=$((fail+1))
+if [[ -f base/deploy/artifacts/installed.json ]]; then
+  # After install.sh step 2, base/'s config carries v2's command range, and v2's own
+  # English tests judge eval sets frozen under v1's range against it: they report
+  # backward and sideways walks as "should refuse". V3's fork judges them correctly, and
+  # install_v3.sh runs V3's tests in the new tree. So here: files, model, runtime only.
+  echo "  base/ has a policy installed ($(python3 -c "import json;print(json.load(open('base/deploy/artifacts/installed.json')).get('run_id'))" 2>/dev/null)): checking its files, model and runtime only"
+  ( cd base && sha256sum --quiet -c FILES.sha256 ) && ok "base files match base/FILES.sha256" || bad "base files differ from base/FILES.sha256"
+  ( cd base/llm/models 2>/dev/null && sha256sum --quiet -c MODEL.sha256 ) && ok "model files match MODEL.sha256" \
+    || bad "no model, or it differs: extract qwen3-1.7b_r1-robot-*.tar.gz in the same directory as the release"
+  [[ -x base/llm/ollama/bin/ollama ]] && ok "ollama runtime present" || bad "base/llm/ollama/bin/ollama missing or not executable"
+else
+  bash base/selftest.sh | sed -n '2,$p' | grep -v '^selftest:'
+  [[ ${PIPESTATUS[0]} -eq 0 ]] || fail=$((fail+1))
+fi
 
 echo "== v3_package/"
 if ( cd v3_package && sha256sum --quiet -c MANIFEST.sha256 ); then ok "package files match MANIFEST.sha256: $(wc -l < v3_package/MANIFEST.sha256) files"

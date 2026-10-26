@@ -14,7 +14,7 @@
 #   [5/5] summary      what to note down, how to start
 # base/ ends up as an installed v2 tree and is never changed by step 4: going back to v2 is
 # sourcing base/deploy/env.sh. Steps 2 and 3 are skipped when already done; step 4 refuses
-# an existing DIR. Everything is logged to ~/orin_commissioning/v3.0.0_install_<time>.log.
+# an existing DIR. Everything is logged to ~/orin_commissioning/<version>_install_<time>.log.
 set -uo pipefail
 REL="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DST="$REL/v3"
@@ -28,7 +28,8 @@ done
 BASE="$REL/base"
 V2_RUN=2026-10-16_17-57-14_v2_drift_ft
 O="${R1_V3_LOG_DIR:-$HOME/orin_commissioning}"; mkdir -p "$O"
-LOG="$O/v3.0.0_install_$(date +%m%d%H%M).log"
+VER="$(sed -n '1s/^r1-robot \(v[^ ]*\).*/\1/p' "$REL/VERSION" 2>/dev/null)"
+LOG="$O/${VER:-v3}_install_$(date +%m%d%H%M).log"
 exec > >(tee "$LOG") 2>&1
 export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-99}" ROS_LOCALHOST_ONLY="${ROS_LOCALHOST_ONLY:-1}"
 step() { echo; echo "[$1/5] $2"; }

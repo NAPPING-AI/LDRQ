@@ -1,4 +1,4 @@
-# R1 机器人软件 v3.0.0（V3）：跳舞，以及有人靠近时后退
+# R1 机器人软件 v3.0.1（V3）：跳舞，以及有人靠近时后退
 
 这个压缩包包含 V3 在**机器人上**（宇树 R1 EDU，机载 Jetson Orin NX）运行所需的全部内容。English: [README.md](README.md)。
 
@@ -24,14 +24,14 @@ v2 原有的功能照常可用：
 
 | 发布文件 | 大小 | 内容 |
 |---|---|---|
-| `release_v3.0.0.tar.gz` | 约 0.5 GB | 本说明、`install.sh`、代码、两个行走策略包（v2；以及用于回滚的 v1）、跳舞策略、YOLOX-Nano、JetPack 5 版 Ollama 模型服务 |
-| `qwen3-1.7b_r1-robot-v3.0.0.tar.gz` | 约 1.3 GB | 语言模型 qwen3:1.7b（Q4_K_M），Ollama 格式 |
+| `release_v3.0.1.tar.gz` | 约 0.5 GB | 本说明、`install.sh`、代码、两个行走策略包（v2；以及用于回滚的 v1）、跳舞策略、YOLOX-Nano、JetPack 5 版 Ollama 模型服务 |
+| `qwen3-1.7b_r1-robot-v3.0.1.tar.gz` | 约 1.3 GB | 语言模型 qwen3:1.7b（Q4_K_M），Ollama 格式 |
 | `SHA256SUMS` | — | 两个压缩包的校验和 |
 
-两个压缩包解压到同一个目录 `r1-robot-v3.0.0/`：
+两个压缩包解压到同一个目录 `r1-robot-v3.0.1/`：
 
 ```
-r1-robot-v3.0.0/
+r1-robot-v3.0.1/
   README.md, README_zh.md       本说明（英文 / 中文）
   install.sh                    把 V3 装到下面的 v3/，分 5 步，每步都有检查
   selftest.sh                   不会让机器人动的自检
@@ -68,21 +68,21 @@ r1-robot-v3.0.0/
 
 ## 安装
 
-**与其他目录并存。** V3 装在自己的目录 `~/r1-robot-v3.0.0` 里。以前的 release 或开发安装留下的目录（`~/r1-robot-v1.1.0`、`~/r1-robot-v2.0.0`、`~/r1-robot-v3`）保持原样。安装前先停掉所有正在运行的栈和模型服务，例如 `bash ~/r1-robot-v2.0.0/llm/ollama_ctl.sh stop`，因为它们用同一个端口。
+**与其他目录并存。** V3 装在自己的目录 `~/r1-robot-v3.0.1` 里。以前的 release 或开发安装留下的目录（`~/r1-robot-v1.1.0`、`~/r1-robot-v2.0.0`、`~/r1-robot-v3`、`~/r1-robot-v3.0.0`）保持原样。v3.0.0 与 v3.0.1 代码相同，只是先发布、文档里还写着预发布；已经装了 v3.0.0 的话，不需要重装。安装前先停掉所有正在运行的栈和模型服务，例如 `bash ~/r1-robot-v2.0.0/llm/ollama_ctl.sh stop`，因为它们用同一个端口。
 
 **1. 电脑上：下载并校验。**
 ```bash
 sha256sum -c SHA256SUMS          # 两个压缩包都应显示 OK
-scp release_v3.0.0.tar.gz qwen3-1.7b_r1-robot-v3.0.0.tar.gz unitree@<机器人IP>:~/
+scp release_v3.0.1.tar.gz qwen3-1.7b_r1-robot-v3.0.1.tar.gz unitree@<机器人IP>:~/
 ```
 要用 `.tar.gz` 拷贝，不要用 zip：zip 会丢掉文件的执行权限。
 
 **2. 机器人上：把两个压缩包解压到同一个位置，然后自检。**
 ```bash
 cd ~
-tar xzf release_v3.0.0.tar.gz
-tar xzf qwen3-1.7b_r1-robot-v3.0.0.tar.gz      # 生成 r1-robot-v3.0.0/base/llm/models/
-bash ~/r1-robot-v3.0.0/selftest.sh             # 每一行都应是 "ok"；机器人不会动
+tar xzf release_v3.0.1.tar.gz
+tar xzf qwen3-1.7b_r1-robot-v3.0.1.tar.gz      # 生成 r1-robot-v3.0.1/base/llm/models/
+bash ~/r1-robot-v3.0.1/selftest.sh             # 每一行都应是 "ok"；机器人不会动
 ```
 `selftest.sh` 检查以下内容：
 - 每个文件与哈希清单是否一致；
@@ -96,9 +96,9 @@ bash ~/r1-robot-v3.0.0/selftest.sh             # 每一行都应是 "ok"；机�
 
 **3. 安装（约 15 分钟，大部分时间在构建引擎）。** 开一个**没有 source 过任何 `env.sh` 的新终端**：
 ```bash
-bash ~/r1-robot-v3.0.0/install.sh
+bash ~/r1-robot-v3.0.1/install.sh
 ```
-每一步打印 `[n/5]`，任何一步失败就停下。日志在 `~/orin_commissioning/v3.0.0_install_<时间>.log`。
+每一步打印 `[n/5]`，任何一步失败就停下。日志在 `~/orin_commissioning/v3.0.1_install_<时间>.log`。
 
 | 步骤 | 做什么 | 应该看到 |
 |---|---|---|
@@ -109,7 +109,7 @@ bash ~/r1-robot-v3.0.0/install.sh
 | 5 总结 | V3 装在哪里，跳舞引擎的指纹 | **记下 `fnv1a=0x...`**：每次起栈都会打印它 |
 
 - 第 2、3 步已经做过的话会自动跳过，所以第 4 步失败后重新运行 `install.sh` 没有问题。
-- 第 4 步遇到已存在的 `v3/` 会拒绝执行，先把它移开：`mv ~/r1-robot-v3.0.0/v3 ~/r1-robot-v3.0.0/v3.old`。
+- 第 4 步遇到已存在的 `v3/` 会拒绝执行，先把它移开：`mv ~/r1-robot-v3.0.1/v3 ~/r1-robot-v3.0.1/v3.old`。
 - 第 4 步（`[5/8]`）**预期的配置差异**：
   - `mission.yaml` 新增 `reflex: on`、`reflex_obstacles: off`、`dance*` 几行，`obj_stop_min_m` 改为 0.9；
   - `perception.yaml` 新增 `proximity_*` 和 `person_box_*`；
@@ -123,7 +123,7 @@ bash ~/r1-robot-v3.0.0/install.sh
 ### 每次开机后、机器人动之前
 
 1. **用手持遥控切到开发者模式。** 不切的话，宇树自己的运控会和本系统同时给电机发指令。现象像是策略不好：晃动、抖动、关节异响。
-2. **锁频**（需要 sudo，重启前一直有效）：`bash ~/r1-robot-v3.0.0/v3/deploy/tools/w08_preflight.sh --lock-clocks`，必须报告 0 FAIL。
+2. **锁频**（需要 sudo，重启前一直有效）：`bash ~/r1-robot-v3.0.1/v3/deploy/tools/w08_preflight.sh --lock-clocks`，必须报告 0 FAIL。
 3. **打开头部相机的视频流**：在宇树 APP 里**关 video_hub**、**开 Stereo patch PC1**。APP 每次开机都会忘掉这个设置。
 4. 机器人吊上吊架，脚着地，绳子留一点松弛。
 
@@ -131,8 +131,8 @@ bash ~/r1-robot-v3.0.0/install.sh
 
 ```bash
 export ROS_DOMAIN_ID=99 ROS_LOCALHOST_ONLY=1      # 必须在 source env.sh 之前，每个终端都要
-source ~/r1-robot-v3.0.0/v3/deploy/env.sh
-R=~/r1-robot-v3.0.0/v3; M=$R/mission_ctl/r1_mission_cli.py; PC=$R/perception/r1_perception_cli.py
+source ~/r1-robot-v3.0.1/v3/deploy/env.sh
+R=~/r1-robot-v3.0.1/v3; M=$R/mission_ctl/r1_mission_cli.py; PC=$R/perception/r1_perception_cli.py
 PM=$R/perception/models; D=$R/v3_models/dance_wave; O=~/orin_commissioning; mkdir -p $O
 ```
 `ROS_DOMAIN_ID` 设置不同的终端之间互相看不到。现象是栈好像对所有指令都没反应。
@@ -374,10 +374,10 @@ cd ~ && tar czf v3_logs_$(date +%m%d).tar.gz orin_commissioning/v3*
 
 ## 回滚、卸载
 
-- **回到 v2**：每个终端改为 `source ~/r1-robot-v3.0.0/base/deploy/env.sh`，起栈时不加 `reflex_*` / `dance_*` 参数。`base/` 是一个装好的 v2 目录树：`install.sh` 只在第 2、3 步改动它（安装 v2、构建视觉引擎），第 4 步还会检查它没有被改动。
+- **回到 v2**：每个终端改为 `source ~/r1-robot-v3.0.1/base/deploy/env.sh`，起栈时不加 `reflex_*` / `dance_*` 参数。`base/` 是一个装好的 v2 目录树：`install.sh` 只在第 2、3 步改动它（安装 v2、构建视觉引擎），第 4 步还会检查它没有被改动。
 - **回到 v1**：在 `base/` 里（source 它的 `env.sh` 之后）执行
-  `bash ~/r1-robot-v3.0.0/base/policy_pack/install_bundle.sh ~/r1-robot-v3.0.0/base/bundles/2026-08-19_11-03-32_week04_nohead`。重新安装 V3 之前，要先把 v2 策略包装回去。
-- **卸载**：先 `bash ~/r1-robot-v3.0.0/v3/llm/ollama_ctl.sh stop`，再 `rm -rf -- ~/r1-robot-v3.0.0`。除了 `~/orin_commissioning/` 里的日志，这个目录以外没有安装任何东西。
+  `bash ~/r1-robot-v3.0.1/base/policy_pack/install_bundle.sh ~/r1-robot-v3.0.1/base/bundles/2026-08-19_11-03-32_week04_nohead`。重新安装 V3 之前，要先把 v2 策略包装回去。
+- **卸载**：先 `bash ~/r1-robot-v3.0.1/v3/llm/ollama_ctl.sh stop`，再 `rm -rf -- ~/r1-robot-v3.0.1`。除了 `~/orin_commissioning/` 里的日志，这个目录以外没有安装任何东西。
 
 ## 许可证
 

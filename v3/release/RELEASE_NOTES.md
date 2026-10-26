@@ -4,6 +4,9 @@
 with the motors on (2026-10-24); that completed the project's engineering (2026-10-26). It
 was validated in the gantry only and has never run untethered.
 
+**Supersedes v3.0.0**, which is the same code, published first while its documents still
+called it a pre-release.
+
 - **A dance policy** (`dance_wave`, run `2026-10-23_16-51-44_wave`, trained with BeyondMimic's
   motion tracking): a 10 s routine on the spot, both feet on the floor.
   `ask "dance for 20 seconds"` starts it only if nobody is within 1 m. A dance ends at the

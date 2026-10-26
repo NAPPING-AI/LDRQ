@@ -89,7 +89,7 @@ V3 在 v2 系统上增加的部分：
 | 真机，输出关 | 10-24 | 两个引擎的耗时、跳舞、有人走近、拒跳 | 两者合计每步 ≤ 2.7 ms（p99）；同一控制步交接 |
 | 真机，吊装、电机输出开 | 10-24 | 跳舞、Ctrl-C、有人走近、拒跳 | 全程 RUNNING；0.79–0.88 米处后退 |
 | 修复 | 10-24 至 10-26 | 跳舞步骤的回复；dry run 里的模拟桥改为 50 Hz 步进；用左右两目计算深度（开发机，开了头，未完成） | — |
-| 完结 | 10-26 | 以吊装测试作为工程部分的终点；发布 v3.0.0 | 项目完结 |
+| 完结 | 10-26 | 以吊装测试作为工程部分的终点；发布 v3.0.1 | 项目完结 |
 
 ### 重要参数
 
@@ -141,7 +141,7 @@ python3 mission_ctl/r1_mission_cli.py run "dance 12s" --dry-run --world mission_
 ```
 `v3/run_tests.sh` 里的 C++ 检查需要支持 C++17 的 g++。硬件桥本身也能在开发机上对着假机器人编译（见 [v3/README.md](v3/README.md#on-a-dev-box)）。
 
-**在机器人上，用 release：** [v3.0.0](https://github.com/NAPPING-AI/LDRQ/releases/tag/v3.0.0)把所有内容（包括语言模型）放在两个压缩包里，用一个 `install.sh` 安装，安装方式与 2026-10-24 真机上相同。使用说明见 [v3/release/README_zh.md](v3/release/README_zh.md)（English：[README.md](v3/release/README.md)），包括安装、每次上机、指令、验收检查、标定、故障排查和回滚。`v3/release/make_release_v3.sh` 可以从已提交的代码重新生成它。
+**在机器人上，用 release：** [v3.0.1](https://github.com/NAPPING-AI/LDRQ/releases/tag/v3.0.1)把所有内容（包括语言模型）放在两个压缩包里，用一个 `install.sh` 安装，安装方式与 2026-10-24 真机上相同。使用说明见 [v3/release/README_zh.md](v3/release/README_zh.md)（English：[README.md](v3/release/README.md)），包括安装、每次上机、指令、验收检查、标定、故障排查和回滚。`v3/release/make_release_v3.sh` 可以从已提交的代码重新生成它。
 
 **在机器人上，用本分支的快速启动包：** [quickstart/ldrq-v3-quickstart.tar.gz](quickstart/ldrq-v3-quickstart.tar.gz)（约 17 MB）分两部分：
 - `base/`：v2 的机器人目录树，包括硬件桥和策略节点的源码、`policy_pack`、`mission_ctl`、模型服务的脚本、v2 和 v1 的策略包，以及带 YOLOX-Nano 和 parity 夹具的视觉节点；

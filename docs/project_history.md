@@ -90,7 +90,8 @@ stages closed by 2026-10-02 (release v1.1.0). Three additions followed, each on 
 - the v2 policy (backward, sideways, no creep on a zero command), released as v2.0.0 on
   2026-10-20;
 - V3 (a dance policy and a person reflex), run in the gantry with the motors on on
-  2026-10-24, released as v3.0.0.
+  2026-10-24, released as v3.0.1 (v3.0.0, the same code, was published first, while its
+  documents still called it a pre-release).
 
 What was left out at the close is listed under each of them below.
 
@@ -142,7 +143,7 @@ What was left out at the close is listed under each of them below.
 
 **Goal.** A second policy that dances on the spot next to v2, and a reflex in the bridge that hands the robot to v2 to step back when a person comes too close (user, 2026-10-22/23)
 
-**Outcome.** **done** 2026-10-26. A reference state machine and conductor in Python, ported to the bridge in C++ and matched tick for tick; the dance policy trained with BeyondMimic's tracking; both policies in one runner; 0 falls in 2017 normal and 2044 emergency handovers in simulation. The head camera's depth proved unusable close up, so a person's distance comes from the box height, calibrated without tape. On the robot (2026-10-24, gantry, output off and then motors on): both engines at most 2.7 ms per step together (p99), the dance ending on a bar, Ctrl-C, handover and retreat at 0.79–0.88 m, refusal with someone close, RUNNING throughout. Released as v3.0.0. Left out at the close: untethered runs, obstacles (depth from the two images, started and not finished), and one unexplained `joint_target stale` ([v3/README.md](../v3/README.md))
+**Outcome.** **done** 2026-10-26. A reference state machine and conductor in Python, ported to the bridge in C++ and matched tick for tick; the dance policy trained with BeyondMimic's tracking; both policies in one runner; 0 falls in 2017 normal and 2044 emergency handovers in simulation. The head camera's depth proved unusable close up, so a person's distance comes from the box height, calibrated without tape. On the robot (2026-10-24, gantry, output off and then motors on): both engines at most 2.7 ms per step together (p99), the dance ending on a bar, Ctrl-C, handover and retreat at 0.79–0.88 m, refusal with someone close, RUNNING throughout. Released as v3.0.1. Left out at the close: untethered runs, obstacles (depth from the two images, started and not finished), and one unexplained `joint_target stale` ([v3/README.md](../v3/README.md))
 
 ## What each week produced, and what was not obvious
 

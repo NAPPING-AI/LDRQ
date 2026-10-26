@@ -1,4 +1,4 @@
-# R1 robot stack v3.0.0 (V3): a dance, and stepping back from people
+# R1 robot stack v3.0.1 (V3): a dance, and stepping back from people
 
 This archive is everything that runs **on the robot** (a Unitree R1 EDU, onboard Jetson
 Orin NX) for V3. 中文说明: [README_zh.md](README_zh.md).
@@ -32,14 +32,14 @@ Source, design notes and results: <https://github.com/NAPPING-AI/LDRQ>, branch `
 
 | release asset | size | what it is |
 |---|---|---|
-| `release_v3.0.0.tar.gz` | about 0.5 GB | this README, `install.sh`, the code, both walking bundles (v2; v1 for rollback), the dance policy, YOLOX-Nano, the Ollama language-model server for JetPack 5 |
-| `qwen3-1.7b_r1-robot-v3.0.0.tar.gz` | about 1.3 GB | the language model, qwen3:1.7b (Q4_K_M), in Ollama's format |
+| `release_v3.0.1.tar.gz` | about 0.5 GB | this README, `install.sh`, the code, both walking bundles (v2; v1 for rollback), the dance policy, YOLOX-Nano, the Ollama language-model server for JetPack 5 |
+| `qwen3-1.7b_r1-robot-v3.0.1.tar.gz` | about 1.3 GB | the language model, qwen3:1.7b (Q4_K_M), in Ollama's format |
 | `SHA256SUMS` | — | checksums of the two archives |
 
-Both archives extract into the same directory, `r1-robot-v3.0.0/`:
+Both archives extract into the same directory, `r1-robot-v3.0.1/`:
 
 ```
-r1-robot-v3.0.0/
+r1-robot-v3.0.1/
   README.md, README_zh.md       this file (English / 中文)
   install.sh                    installs V3 into v3/ (below), in five checked steps
   selftest.sh                   checks that need no robot motion
@@ -76,25 +76,27 @@ r1-robot-v3.0.0/
 
 ## Install
 
-**Next to other trees.** V3 installs into its own directory, `~/r1-robot-v3.0.0`. Trees
+**Next to other trees.** V3 installs into its own directory, `~/r1-robot-v3.0.1`. Trees
 from earlier releases or development installs are left as they are:
-`~/r1-robot-v1.1.0`, `~/r1-robot-v2.0.0` and `~/r1-robot-v3`. Stop every running stack and
+`~/r1-robot-v1.1.0`, `~/r1-robot-v2.0.0`, `~/r1-robot-v3` and `~/r1-robot-v3.0.0`. (v3.0.0 is
+the same code as v3.0.1, published first while its documents still called it a
+pre-release; if it is installed, there is no need to reinstall.) Stop every running stack and
 every model server first. For example, `bash ~/r1-robot-v2.0.0/llm/ollama_ctl.sh stop`:
 all servers use the same port.
 
 **1. On a PC: download and check.**
 ```bash
 sha256sum -c SHA256SUMS          # both archives: OK
-scp release_v3.0.0.tar.gz qwen3-1.7b_r1-robot-v3.0.0.tar.gz unitree@<robot-ip>:~/
+scp release_v3.0.1.tar.gz qwen3-1.7b_r1-robot-v3.0.1.tar.gz unitree@<robot-ip>:~/
 ```
 Copy them as `.tar.gz`. A zip loses the files' execute permissions.
 
 **2. On the robot: extract both into the same place, and self-test.**
 ```bash
 cd ~
-tar xzf release_v3.0.0.tar.gz
-tar xzf qwen3-1.7b_r1-robot-v3.0.0.tar.gz      # adds r1-robot-v3.0.0/base/llm/models/
-bash ~/r1-robot-v3.0.0/selftest.sh             # every line "ok"; moves nothing
+tar xzf release_v3.0.1.tar.gz
+tar xzf qwen3-1.7b_r1-robot-v3.0.1.tar.gz      # adds r1-robot-v3.0.1/base/llm/models/
+bash ~/r1-robot-v3.0.1/selftest.sh             # every line "ok"; moves nothing
 ```
 `selftest.sh` checks:
 - every file against its hash list;
@@ -112,10 +114,10 @@ v2's backward and sideways walks as errors. V3's tests still run.
 **3. Install (about 15 minutes; most of it builds engines).** Use a **new terminal that has
 not sourced any `env.sh`**:
 ```bash
-bash ~/r1-robot-v3.0.0/install.sh
+bash ~/r1-robot-v3.0.1/install.sh
 ```
 It prints `[n/5]` for each step, and any failure stops it. The log is
-`~/orin_commissioning/v3.0.0_install_<time>.log`.
+`~/orin_commissioning/v3.0.1_install_<time>.log`.
 
 | step | what it does | expect |
 |---|---|---|
@@ -128,7 +130,7 @@ It prints `[n/5]` for each step, and any failure stops it. The log is
 - Steps 2 and 3 are skipped if they were done before, so running `install.sh` again after a
   failure in step 4 is fine.
 - Step 4 refuses an existing `v3/`. Move it away first:
-  `mv ~/r1-robot-v3.0.0/v3 ~/r1-robot-v3.0.0/v3.old`.
+  `mv ~/r1-robot-v3.0.1/v3 ~/r1-robot-v3.0.1/v3.old`.
 - **Expected config differences** at step 4 (`[5/8]`):
   - `mission.yaml` gains `reflex: on`, `reflex_obstacles: off`, the `dance*` lines, and
     `obj_stop_min_m` 0.9;
@@ -148,7 +150,7 @@ It prints `[n/5]` for each step, and any failure stops it. The log is
    motion controller keeps commanding the motors at the same time as this stack. The
    result looks like a bad policy: sway, tremor, grinding joints.
 2. **Lock the clocks** (needs sudo, lasts until reboot):
-   `bash ~/r1-robot-v3.0.0/v3/deploy/tools/w08_preflight.sh --lock-clocks`. It must report
+   `bash ~/r1-robot-v3.0.1/v3/deploy/tools/w08_preflight.sh --lock-clocks`. It must report
    0 FAIL.
 3. **Switch the head camera's stream on**, in the Unitree app: **video_hub off**, **Stereo
    patch PC1 on**. The app forgets this at every boot.
@@ -158,8 +160,8 @@ It prints `[n/5]` for each step, and any failure stops it. The log is
 
 ```bash
 export ROS_DOMAIN_ID=99 ROS_LOCALHOST_ONLY=1      # before env.sh, in EVERY terminal
-source ~/r1-robot-v3.0.0/v3/deploy/env.sh
-R=~/r1-robot-v3.0.0/v3; M=$R/mission_ctl/r1_mission_cli.py; PC=$R/perception/r1_perception_cli.py
+source ~/r1-robot-v3.0.1/v3/deploy/env.sh
+R=~/r1-robot-v3.0.1/v3; M=$R/mission_ctl/r1_mission_cli.py; PC=$R/perception/r1_perception_cli.py
 PM=$R/perception/models; D=$R/v3_models/dance_wave; O=~/orin_commissioning; mkdir -p $O
 ```
 Terminals with different `ROS_DOMAIN_ID` settings cannot see each other. The symptom is a
@@ -430,15 +432,15 @@ roughly when.
 
 ## Roll back, remove
 
-- **Back to v2:** in each terminal `source ~/r1-robot-v3.0.0/base/deploy/env.sh` instead,
+- **Back to v2:** in each terminal `source ~/r1-robot-v3.0.1/base/deploy/env.sh` instead,
   and start the stack without the `reflex_*` / `dance_*` arguments. `base/` is an installed
   v2 tree; `install.sh` changes it only in steps 2 and 3 (the v2 install, the vision
   engine), and step 4 checks that it stays unchanged.
 - **Back to v1:**
-  `bash ~/r1-robot-v3.0.0/base/policy_pack/install_bundle.sh ~/r1-robot-v3.0.0/base/bundles/2026-08-19_11-03-32_week04_nohead`
+  `bash ~/r1-robot-v3.0.1/base/policy_pack/install_bundle.sh ~/r1-robot-v3.0.1/base/bundles/2026-08-19_11-03-32_week04_nohead`
   (in `base/`, with its `env.sh` sourced). Install the v2 bundle again before reinstalling V3.
-- **Remove:** `bash ~/r1-robot-v3.0.0/v3/llm/ollama_ctl.sh stop`, then
-  `rm -rf -- ~/r1-robot-v3.0.0`. Nothing was installed outside that directory except logs in
+- **Remove:** `bash ~/r1-robot-v3.0.1/v3/llm/ollama_ctl.sh stop`, then
+  `rm -rf -- ~/r1-robot-v3.0.1`. Nothing was installed outside that directory except logs in
   `~/orin_commissioning/`.
 
 ## Licenses

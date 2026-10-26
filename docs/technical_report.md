@@ -291,7 +291,7 @@ Each one looked like success or like a plausible physical effect.
 |---|---|---|---|
 | v1 | release v1.1.0 | everything in §1–§7 | released |
 | v2 | release v2.0.0 | the walking policy retrained: no creep on a zero command, backward and sideways | released; on the robot since 2026-10-20 |
-| V3 | branch `v3`, directory `v3/` | a dance policy next to v2, and a proximity reflex that hands over to v2 | complete: on the robot in the gantry, motors on, 2026-10-24; release v3.0.0 |
+| V3 | branch `v3`, directory `v3/` | a dance policy next to v2, and a proximity reflex that hands over to v2 | complete: on the robot in the gantry, motors on, 2026-10-24; release v3.0.1 |
 
 ### v2: a walking policy that can hold still
 

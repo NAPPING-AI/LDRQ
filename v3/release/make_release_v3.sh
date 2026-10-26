@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Dev box: the V3 robot release, from the COMMITTED tree.
 #
-#   bash v3/release/make_release_v3.sh --runtime <dir> [--version 3.0.0] [--out <dir>]
+#   bash v3/release/make_release_v3.sh --runtime <dir> [--version 3.0.1] [--out <dir>]
 #
 # <dir> holds llm/ollama/ (Ollama v0.34.4 arm64 + jetpack5, unpacked) and llm/models/ (an
 # Ollama model store with qwen3:1.7b), as release/make_release.sh takes it; the v2.0.0
@@ -24,7 +24,7 @@
 # deploy/.venv/bin/python) needs numpy, onnxruntime and OpenCV, for the YOLOX fixture.
 set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-V=3.0.0; RUNTIME=""; OUT=""; MODEL=qwen3; TAGM=1.7b
+V=3.0.1; RUNTIME=""; OUT=""; MODEL=qwen3; TAGM=1.7b
 PY="${PYTHON:-python3}"
 FPY="${FIXTURE_PYTHON:-$REPO/deploy/.venv/bin/python}"
 while [[ $# -gt 0 ]]; do

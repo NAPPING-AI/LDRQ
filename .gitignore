@@ -28,6 +28,8 @@ outputs/
 *.zip
 *.rar
 *.7z
+# except the quick-start archive (quickstart/make_quickstart.sh), a few MB, asked for in the branch
+!quickstart/*-quickstart.tar.gz
 *.mp4
 *.mov
 *.avi

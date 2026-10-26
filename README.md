@@ -1,14 +1,18 @@
-# LDRQ: a Unitree R1 humanoid from simulation to English commands
+# LDRQ V3: a Unitree R1 humanoid that dances on request and steps back from people
 
-[![tests](https://github.com/kedianwen/LDRQ/actions/workflows/tests.yml/badge.svg)](https://github.com/kedianwen/LDRQ/actions/workflows/tests.yml)
+[![tests](https://github.com/NAPPING-AI/LDRQ/actions/workflows/tests.yml/badge.svg)](https://github.com/NAPPING-AI/LDRQ/actions/workflows/tests.yml)
 [![license: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
-[![release](https://img.shields.io/github/v/release/kedianwen/LDRQ)](https://github.com/kedianwen/LDRQ/releases)
 
-[中文简介](README_zh.md)
+[中文](README_zh.md)
 
 A walking policy for the **Unitree R1** humanoid, trained in Isaac Lab, deployed on the
 robot's own Jetson Orin NX, measured against the simulator, and commanded in English
-through a small language model running on the robot.
+through a small language model running on the robot. V3 adds a second policy that dances,
+and a reflex that steps the robot back from a person who comes too close.
+
+> **This is the `v3` branch.** The project has three versions, one per branch: `main`
+> (v1), `v2` and `v3` (V3, this one). The overview of all three, with each version's
+> architecture, is the README on [`main`](https://github.com/NAPPING-AI/LDRQ/tree/main).
 
 <p align="center">
   <a href="docs/media/ldrq_pitch.mp4"><img src="docs/media/cover.jpg" width="720" alt="LDRQ: LLM-Driven Robotic Query-to-action. The Unitree R1 walking on the real robot, beside its simulation in Isaac Lab"></a>
@@ -16,83 +20,63 @@ through a small language model running on the robot.
   the sim2real measurement, and English commands on the real robot.</em>
 </p>
 
-## Results at a glance
+## V3 (this branch)
 
-| what | result |
-|---|---|
-| speed tracking in simulation, 0.5–1.0 m/s | worst error **0.037 m/s** (gate 0.15), no falls |
-| TensorRT on the robot against PyTorch | max difference **1.3e-5** over 512 inputs (gate 1e-3) |
-| policy inference on the Orin, in the 50 Hz loop | **~0.45 ms** of a 20 ms step |
-| continuous walking without the gantry | **≥ 79.7 s** |
-| tolerated actuator stiffness, `kp_scale` | simulator **0.80–2.00+**, real robot **1.10–1.50**; the gap is posture, not joint tracking |
-| closed-loop turns on the robot | 10/10 within **1.6°** by the IMU |
-| English sentence → checked plan, held-out test sets | **77/80** on the Orin, 0.65 s median; 11/11 instructions right end to end |
-| swapping the policy | **one command**, 8 checked steps; 3/3 bad bundles refused before any change |
-| v2 policy: zero command, simulation | creep **0.45 → 0.14 m per 10 s** (v1 → v2); backward to 0.6 m/s, sideways ±0.5 m/s, turns to 1.4 rad/s, no falls |
-| v2 on the robot | walks **backward and sideways** and holds its place on a zero command; installed by the same one command |
-| V3: a dance and a person reflex, simulation | handing the dancing robot to v2: **0 falls** in 2017 normal and 2044 emergency handovers |
-| V3 on the robot (gantry, motors on) | dances on request, ends on a bar, steps back when a person comes within **0.9 m**, refuses to start with someone within 1 m; both policies **≤ 2.7 ms** per step together (p99) |
+### What V3 is
 
-The full account is [docs/technical_report.md](docs/technical_report.md); how the work was
-organized and what each step found is [docs/project_history.md](docs/project_history.md).
+V3 is v2 with three additions. v2's walking policy is unchanged.
+- **A dance policy**, `dance_wave` (run `2026-10-23_16-51-44_wave`), trained with
+  BeyondMimic's motion tracking to follow a 10 s routine on the spot: the right arm waves,
+  then the left, both arms up with two knee dips, then standing still. Both feet stay on
+  the floor.
+- **Two policies in one process.** The policy runner infers v2 and the dance policy on
+  every control step, in one CUDA context. A state machine in the bridge, the
+  *conductor*, decides which policy's output reaches the motors.
+- **A person reflex** in the bridge, once per control step. When a person comes within
+  0.6 m (0.9 m while dancing), v2 takes over on that same step, backs off for 1.5 s (about
+  0.33 m) and stands until the operator confirms a new plan. Neither the language model nor
+  the command layer is in this loop.
 
-## Versions
+For the operator, `ask "dance for 20 seconds"`:
+- starts a dance only if nobody is within 1 m and the robot has stood still for 1 s;
+- ends it at the end of a bar;
+- hands the robot to v2 to step back if someone comes close;
+- `stop dancing` or Ctrl-C ends it at the next bar.
 
-| version | where | what changed | status |
-|---|---|---|---|
-| v1 | release [v1.1.0](https://github.com/kedianwen/LDRQ/releases/tag/v1.1.0) | the W04 walking policy, the robot runtime, the English command layer, one-command policy install | released |
-| v2 | release [v2.0.0](https://github.com/kedianwen/LDRQ/releases/tag/v2.0.0), branch `master` | a retrained walking policy: no creep on a zero command, backward and sideways walking | released, deployed on the robot since 2026-10-20 |
-| V3 | branch `v3`, directory [v3/](v3/README.md) | a second policy that dances, and a reflex that hands the robot to v2 to step back from a person | in development; ran on the robot on the gantry, 2026-10-24 |
+**Status.** On 2026-10-24 V3 ran on the robot in the gantry, first with the output off, then
+with the motors on. The bridge stayed RUNNING throughout. The robot danced and handed back
+to v2 at the end of a bar, stopped at the next bar on Ctrl-C, and stepped back from the
+dance when a person came within 0.79–0.88 m. A dance asked for with someone too close was
+refused. Still to do:
+- untethered runs (R4);
+- the reflex acts on people only: obstacles wait for depth computed from the two head
+  images;
+- one `DEGRADED: joint_target stale` seen with the output off is not explained yet.
 
-**v2: walking that holds still and goes backward** ([docs/v2_policy.md](docs/v2_policy.md)).
-On a zero command, v1 crept forward about 0.45 m every 10 s. Zero was the edge of its
-trained range (forward only), and only 2 % of its training environments ever got a zero
-command. v2 is a two-stage retrain on the same observation and action interface:
-1. The command range is widened to span zero (backward to −0.6 m/s, sideways ±0.5 m/s,
-   turns ±1.57 rad/s), and 15 % of environments get a zero command.
-2. A penalty on the drift (the velocity averaged over about a second) is added only after
-   the gait has formed. Added from the start, it taught the policy to stand still and
-   ignore small commands.
+All V3 code lives under [v3/](v3/README.md), whose README is the detailed account.
 
-Results in simulation: creep falls to 0.14 m per 10 s; the policy walks backward and
-sideways and turns three times faster than v1, with no falls. v2 passes through the same one-command install as v1 (engine
-built on the Orin, gated by parity). On the robot it walks backward and sideways and holds
-its place on a zero command. Everything above the policy is unchanged, except that the
-command layer reads v2's wider command range.
+### Architecture
 
-**V3: a dance, and stepping back from people** ([v3/README.md](v3/README.md)). Two
-policies run side by side in the same process on the Orin, and both are inferred every
-control step:
-- **v2** for walking;
-- **a dance policy** ([v3/models/dance_wave](v3/models/dance_wave/README.md)), trained with
-  BeyondMimic's motion tracking to follow a 10 s routine on the spot.
-
-A state machine in the hardware bridge (the conductor) chooses which policy's output reaches
-the motors:
-- `ask "dance for 20 seconds"` starts a dance only if nobody is within 1 m and the robot
-  has stood still for 1 s;
-- a normal end waits for the end of a bar;
-- if a person comes within 0.9 m of the dancing robot, v2 takes over on the same control
-  step, steps back for 1.5 s (about 0.33 m) and stands until the operator confirms a new
-  plan;
-- the same reflex protects walking and standing, triggering at 0.6 m.
-
-The person's distance comes from the size of their detection box. The head camera's
-depth is filled in up close, so it reports obstacles that are not there. Depth computed
-from the two head images is under way, for obstacles. All V3 code lives under `v3/`, so
-v1 and v2 stay reproducible as released.
-
-## How it fits together
-
-![System architecture with V3](docs/system_architecture_v3.svg)
+![V3 architecture](docs/system_architecture_v3.svg)
 
 An English sentence becomes a plan once, before the robot moves: the model only
-transcribes, deterministic code checks the plan against what the policy was trained on,
-and the operator confirms. Below that, the command layer (10 Hz), the policies (50 Hz) and
-the motor loop (500 Hz) each have their own safety checks. The diagram is the V3 system.
-v2 is the same picture without the dance policy and the conductor
-([v2-era diagram](docs/system_architecture.svg); details and the logic diagram:
-[docs/system_architecture.md](docs/system_architecture.md)).
+transcribes, deterministic code checks the plan, and the operator confirms. Below that,
+the command layer (10 Hz), the policies (50 Hz) and the motor loop (500 Hz) each have
+their own safety checks.
+
+What V3 adds to v2's system:
+- **mission_ctl** has a `dance` step. It sends the dance request as a heartbeat, and ends
+  the plan when the reflex steps the robot back.
+- **The bridge** carries the reflex (OFF, ARMED, RETREAT, STAND) and the conductor. Each
+  control step it reads `/r1_perception/proximity` and writes the velocity command into
+  v2's observation. It then passes on the targets of the policy that drives.
+- **The runner** builds both observations and runs both engines every step: at most
+  2.7 ms together at p99, against a 4 ms budget.
+
+Source: [docs/system_architecture_v3.dot](docs/system_architecture_v3.dot). The v2 system
+of 2026-10-20 is drawn on the `v2` branch. The page
+[docs/system_architecture.md](docs/system_architecture.md) explains the v1 system of
+2026-09-30, which is the same below the command layer.
 
 **Vision** ([perception/](perception/README.md), [docs/stageE_perception.md](docs/stageE_perception.md);
 V3's fork [v3/perception/](v3/perception/README.md)). The R1 EDU has no camera wired to
@@ -115,49 +99,123 @@ calibrated without a tape measure: a helper stands at arm's length, then one ste
 The module's own depth cannot be used up close: it fills the pixels it cannot match with
 near values. Depth computed from the left and right images is in development.
 
-Status:
-- the person reflex runs on the robot (V3, 2026-10-24);
-- the engine, parity and coexistence with the policy passed on the robot;
-- `turn_to` and `walk_to` are tested on the dev box, and their robot runs are pending.
+### Development order
 
-## Quick start
+| step | dates (2026) | what was built | result |
+|---|---|---|---|
+| v1, v2 | to 10-20 | the walking system and the v2 policy; see `main` and `v2` | — |
+| forks | 10-22 | `v3/`: forks of perception, mission_ctl, the bridge and the runner from release v2.0.0, run on the v2 policy | v1 and v2 stay reproducible as released |
+| retreat in simulation | 10-22 | how v2 answers a −0.3 m/s command from standing, turning and walking; the speed-dependent stop distance | 0 falls; 0.33 m from standing |
+| the reflex | 10-22 | reference state machine (Python), its golden ticks, the bridge's C++ port, mission_ctl's link, perception's proximity topic | C++ matches the reference tick for tick |
+| first robot session | 10-23 | the head camera's depth fills near pixels: phantom obstacles at 0.05–0.35 m | people only, distance from box height (`person_box`), calibrated without tape |
+| the dance | 10-23 | the routine and its checks on the URDF; BeyondMimic tracking task; `dance_wave` (6000 iterations, 4096 envs); export, fixture | ONNX parity 5.3e-5 (dev box) |
+| two policies | 10-23 | the conductor (reference and C++), the runner with two engines, the handover in simulation, the `dance` step and its eval sets | 0 falls in 2017 normal and 2044 emergency handovers |
+| robot install | 10-24 | `install_v3.sh` makes `~/r1-robot-v3` from the v2 tree; both engines built and gated on the Orin | parity v2 2.3e-05, dance 4.6e-05 |
+| robot, output off | 10-24 | two engines' timing, the dance, a person walking up, refusals | ≤ 2.7 ms per step together (p99); handover on the same step |
+| robot, motors on (gantry) | 10-24 | the dance, Ctrl-C, a person walking up, refusal | RUNNING throughout; stepped back at 0.79–0.88 m |
+| fixes | 10-24 to 10-26 | the reply for a dance step; the dry run's bridge stepped at 50 Hz; depth from the two images (dev box, in progress) | — |
+| next | — | untethered runs (R4); obstacles from the two-image depth | — |
 
-Pick the row that matches what you have. Everything in the first two rows runs on any
-machine with Python 3.8+, with no GPU, no ROS and no robot.
+### Key parameters
 
-| you want to… | do this | time |
+| parameter | value | where it is set |
 |---|---|---|
-| **understand the project** | read [docs/technical_report.md](docs/technical_report.md) (the whole project in one document), then [docs/system_architecture.md](docs/system_architecture.md) (how a sentence becomes motor commands) | 30 min |
-| **run something now** | the commands below | 2 min |
-| **train or evaluate in simulation** | an NVIDIA GPU with Isaac Lab 2.1 / Isaac Sim 4.5 → [*Reproducing*](#reproducing) and [*Reproducing a training run*](#reproducing-a-training-run) | 1 h to set up, 1.5 h per training run |
-| **run it on an R1** | an R1 EDU (onboard Orin NX) → download the robot release ([Releases](https://github.com/kedianwen/LDRQ/releases): `release_v2.0.0.tar.gz` + the model archive) and follow its README ([release/README.md](release/README.md), 中文 [release/README_zh.md](release/README_zh.md)); read [*Running on the robot*](#running-on-the-robot) first | an hour |
+| walking policy | v2 (`v2_drift_ft`), unchanged: 425 → 24 at 50 Hz | `models/v2_drift_ft/` |
+| dance policy | 137 inputs (no history) → 24 joint targets at 50 Hz; v2's action joints, scales, default pose and gains | [v3/models/dance_wave/interface.json](v3/models/dance_wave/interface.json) |
+| dance routine | a 10 s loop of 4 bars; handover only at a bar boundary | `v3/dance/routine.py` |
+| dance training | BeyondMimic tracking, Isaac Lab 2.1.0, 6000 iterations, 4096 envs, v2's randomization added | `v3/dance/r1_tracking.py`, `train_dance.py` |
+| `kp_scale` on the robot | 1.3, as v2 (one set of gains for both policies) | launch argument |
+| reflex: retreat | person within **0.6 m** (obstacle 0.45 m) on 2 frames in a row → (−0.3, 0, 0) m/s for 1.5 s, then stand until a reset | `v3/ros2_ws/src/r1_hw_bridge/config/bridge.yaml` `reflex_*` |
+| reflex: limits | at most 2 retreats in 10 s; another needs the person beyond trigger + 0.2 m; frames older than 0.3 s block forward walking | same |
+| stop distance | max(floor, trigger + 0.10 + 1.5 · v · latency + 1.3 · brake(v)); floor person 1.2 m, obstacle 0.6 m; latency 0.25 s | same; `v3/reflex/stop_distance.py` |
+| conductor | start: nobody within **1.0 m** and 1 s standing still; while dancing the reflex triggers at **0.9 m**; heartbeat 0.5 s; at most 63 s | `conductor.hpp` defaults (`dance_*` parameters) |
+| dance step | 5 to 60 s, 20 s if not said; refused without the reflex | `v3/mission_ctl/config/mission.yaml` (`dance_*`) |
+| person distance | `person_box`: distance = 0.465 / (box height ÷ image height); a box touching top and bottom = right in front | `v3/perception/config/perception.yaml` (`person_box_k`, calibrated 2026-10-24) |
+| reflex in mission_ctl | `reflex: on`, `reflex_obstacles: off` (people only) | `mission.yaml` |
+| launch | `reflex_enable:=true dance_enable:=true dance_engine:=... dance_reference:=...` (both default false) | `r1_stack.launch.py` |
+
+### Intermediate files
+
+| file | made by | in git |
+|---|---|---|
+| `v3/dance/` routine CSV → BeyondMimic motion `.npz` (with a replay video) | `routine.py`, `csv_to_npz_r1.py` (Isaac) | no, regenerated |
+| `logs/rsl_rl/r1_dance_v3/2026-10-23_16-51-44_wave/` | `v3/dance/train_dance.py` | no (GB) |
+| `v3/models/dance_wave/` `model_5999.pt`, `policy.pt`, `policy.onnx`, `interface.json` | training, `export_dance.py` | yes (`SHA256SUMS`) |
+| `v3/models/dance_wave/dance_ref.bin` | the reference the runner plays: one loop, 500 frames | yes |
+| `v3/models/dance_wave/parity_fixture.bin` | `deploy/tools/make_fixture.py --in-dim 137` | yes |
+| `v3/reflex/golden.csv`, `golden_dance.csv` | `reflex/cases.py`, `dance_cases.py`: every tick of every case, the contract the C++ is tested against | yes |
+| retreat and handover tables | `v3/sim/eval_retreat.py`, `eval_handover.py`, `summarize_retreat.py` | the numbers are in [v3/README.md](v3/README.md) |
+| `r1_v3_<n>_<date>.tar.gz` | `v3/tools/make_robot_package.sh` | no; the quick-start archive holds one |
+| `~/r1-robot-v3/` (a new tree), `v3_models/dance_wave/policy_fp32.plan` | `install_v3.sh`, **on the robot**, gated by parity | no |
+| `perception/models/yolox_fp16.plan` | `r1_build_engine --fp16`, **on the robot** | no |
+| `~/orin_commissioning/v3*_stack.log`, `*_reflex_log.csv` (one line per control step), `*_perception.log` | the stack and the perception node on the robot | no |
+| stereo recordings (`stereo_capture.py`) | the head cameras' RTP packets, for the two-image depth | no: they can show people's faces |
+
+### Quick start
+
+**Without a robot** (any machine with Python 3.8+ and numpy; no GPU, no ROS):
 
 ```bash
-git clone https://github.com/kedianwen/LDRQ.git && cd LDRQ
+git clone -b v3 https://github.com/NAPPING-AI/LDRQ.git && cd LDRQ
+./run_tests.sh                        # v1 and v2: everything that needs no GPU, ROS or robot
+cd v3 && ./run_tests.sh               # V3: reflex, conductor, C++ against the golden files, dance, mission_ctl
 
-# every check that needs no GPU, ROS or robot (~3 s, standard library only):
-# command layer, English front end, eval sets, coexistence selftest,
-# policy packaging, the deployed policy's SHA256, Markdown links, a dry run.
-# CI runs the same script.
-./run_tests.sh
-
-# what the robot says it can do, generated from the deployed configuration
-python3 mission_ctl/r1_mission_cli.py capability
-
-# a plan, compiled, checked and simulated against a stand-in robot; nothing moves
-python3 mission_ctl/r1_mission_cli.py run "walk 3s@0.3; turn left 90" --dry-run
-
-# the same with the v2 policy's command range: backward and sideways exist
-printf '{"vx": [-0.6, 1.0], "vy": [-0.5, 0.5], "wz": [-1.57, 1.57]}' > /tmp/v2_env.json
-python3 mission_ctl/r1_mission_cli.py run "walk backward 1m; walk left 2s" --dry-run --envelope /tmp/v2_env.json
+# a dance in a simulated empty room, with the bridge's reflex and conductor simulated: DONE
+python3 mission_ctl/r1_mission_cli.py run "dance 12s" --dry-run --world mission_ctl/tests/worlds/room.json
+# the same while a person walks up: v2 takes over and steps back
+python3 mission_ctl/r1_mission_cli.py run "dance 12s" --dry-run --world mission_ctl/tests/worlds/approach.json
 ```
+The C++ checks in `v3/run_tests.sh` need g++ with C++17; the bridge itself builds on a
+dev box against a fake robot (see [v3/README.md](v3/README.md#on-a-dev-box)).
 
-To try the English front end as well, run [Ollama](https://ollama.com) with
-`ollama pull qwen3:1.7b`, then
-`python3 mission_ctl/r1_mission_cli.py ask "walk forward for 3 seconds, then turn left" --dry-run`.
-It prints the parsed plan, or the reason it refuses. The plotting and video tools need
-`pip install -r requirements.txt`; [requirements.txt](requirements.txt) also says where
-the simulation, TensorRT and robot dependencies come from.
+**On the robot:** [quickstart/ldrq-v3-quickstart.tar.gz](quickstart/ldrq-v3-quickstart.tar.gz)
+(about 17 MB) holds two parts:
+- `base/`, the v2 robot tree: the bridge and policy node as source, `policy_pack`,
+  `mission_ctl`, the model server's scripts, the v2 and v1 bundles, and the vision node
+  with YOLOX-Nano and its parity fixture;
+- `v3_package/`, V3 as `v3/tools/make_robot_package.sh` packs it, with the dance policy:
+  `install_v3.sh`, the V3 code in the robot tree's layout, and the hash lists the
+  installer checks.
+
+This is the path the robot took on 2026-10-24: v2 installed in a tree, then `install_v3.sh`
+makes a new tree, `~/r1-robot-v3`, from it, and leaves the v2 tree as it was. The same
+archive passed `install_v3.sh --rehearsal` on the dev box: all 8 steps, the source tree
+unchanged, V3's tests green in the new tree. The language model's runtime and weights
+(about 1.8 GB) are too large for git; the guide says where to get them.
+[quickstart/make_quickstart.sh](quickstart/make_quickstart.sh) rebuilds the archive from the
+committed tree.
+
+### Robot guide
+
+[quickstart/ROBOT_GUIDE.md](quickstart/ROBOT_GUIDE.md) (中文
+[quickstart/ROBOT_GUIDE_zh.md](quickstart/ROBOT_GUIDE_zh.md)) covers the full path:
+1. the v2 base, the vision engine and V3's install;
+2. the camera and the tape-free calibration;
+3. the checks with the output off;
+4. the checks in the gantry with the motors on.
+
+Each step says what to check and when to stop. Read
+[*Running on the robot*](#running-on-the-robot) below first.
+
+## Results at a glance
+
+| what | result |
+|---|---|
+| speed tracking in simulation, 0.5–1.0 m/s | worst error **0.037 m/s** (gate 0.15), no falls |
+| TensorRT on the robot against PyTorch | max difference **1.3e-5** over 512 inputs (gate 1e-3) |
+| policy inference on the Orin, in the 50 Hz loop | **~0.45 ms** of a 20 ms step |
+| continuous walking without the gantry | **≥ 79.7 s** |
+| tolerated actuator stiffness, `kp_scale` | simulator **0.80–2.00+**, real robot **1.10–1.50**; the gap is posture, not joint tracking |
+| closed-loop turns on the robot | 10/10 within **1.6°** by the IMU |
+| English sentence → checked plan, held-out test sets | **77/80** on the Orin, 0.65 s median; 11/11 instructions right end to end |
+| swapping the policy | **one command**, 8 checked steps; 3/3 bad bundles refused before any change |
+| v2 policy: zero command, simulation | creep **0.45 → 0.14 m per 10 s** (v1 → v2); backward to 0.6 m/s, sideways ±0.5 m/s, turns to 1.4 rad/s, no falls |
+| v2 on the robot | walks **backward and sideways** and holds its place on a zero command; installed by the same one command |
+| V3: a dance and a person reflex, simulation | handing the dancing robot to v2: **0 falls** in 2017 normal and 2044 emergency handovers |
+| V3 on the robot (gantry, motors on) | dances on request, ends on a bar, steps back when a person comes within **0.9 m**, refuses to start with someone within 1 m; both policies **≤ 2.7 ms** per step together (p99) |
+
+The full account is [docs/technical_report.md](docs/technical_report.md); how the work was
+organized and what each step found is [docs/project_history.md](docs/project_history.md).
 
 ## Layout
 
@@ -176,6 +234,7 @@ the simulation, TensorRT and robot dependencies come from.
 | `release/` | the robot-side release: install and usage READMEs (English, 中文), the robot self-test, and `make_release.sh`, which builds the release assets from the committed tree | v1.1.0, v2.0.0 | [release/README.md](release/README.md) |
 | `docs/` | results: the technical report, per-stage write-ups, figures, robot evidence | all | [docs/README.md](docs/README.md) |
 | `v3/` | V3, isolated from v1/v2: the dance policy and its training, the two-policy runner and bridge (forks), the proximity reflex, mission_ctl with a `dance` step, robot install and update scripts | V3 | [v3/README.md](v3/README.md) |
+| `quickstart/` | the V3 quick-start archive for the robot (the v2 base and the V3 package), the script that builds it, and the robot guide (English, 中文) | 2026-10-26 | [quickstart/ROBOT_GUIDE.md](quickstart/ROBOT_GUIDE.md) |
 
 The W07 snapshot of the robot's deploy tree (Orin-built binaries and engines, extracted
 to `~/kdw_deploy` on the robot) is a [GitHub Release](https://github.com/kedianwen/LDRQ/releases/tag/orin-snapshot-w07),

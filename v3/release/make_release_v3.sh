@@ -79,9 +79,13 @@ cp release/third_party/OLLAMA_LICENSE "$S/llm/ollama/LICENSE"
 mkdir -p "$S/llm/models"          # the model archive fills this
 printf 'r1-robot v%s base (v2 tree)\ngit %s\nbuilt %s\npolicy 2026-10-16_17-57-14_v2_drift_ft (rollback: 2026-08-19_11-03-32_week04_nohead)\nmodel %s:%s\n' \
   "$V" "$SHA" "$(date -Iseconds)" "$MODEL" "$TAGM" > "$S/VERSION"
+# Left out of base/FILES.sha256: the files install_bundle.sh writes from the bundle (which
+# selftest verifies on its own), so that selftest.sh, and install.sh after a failed step 4,
+# still pass once the v2 bundle is installed in base/.
+WRITTEN='^(deploy/interface/(actuator_gains|policy_interface)\.json|deploy/ros2_ws/src/r1_hw_bridge/config/bridge\.yaml|deploy/ros2_ws/src/r1_hw_bridge/include/r1_hw_bridge/joint_map\.hpp|deploy/ros2_ws/src/r1_policy_runner/config/policy_interface\.yaml)$'
 ( cd "$S" && find . -type f ! -name FILES.sha256 ! -path './llm/models/*' -printf '%P\n' | sort \
-    | xargs -d '\n' sha256sum > FILES.sha256 )
-echo "   base: $(wc -l < "$S/FILES.sha256") files"
+    | grep -vE "$WRITTEN" | xargs -d '\n' sha256sum > FILES.sha256 )
+echo "   base: $(wc -l < "$S/FILES.sha256") files (and 5 the bundle install writes)"
 
 echo "== v3_package/"
 bash v3/tools/make_robot_package.sh rel --model v3/models/dance_wave "$WORK" | tail -1

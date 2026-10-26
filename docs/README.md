@@ -35,6 +35,7 @@ requirement) are explained in [project_history.md](project_history.md).
 | `stageA_kp_sweep_sim.json`, `stageA_kp_sweep_real.json` | the data behind it: the figure redraws from these two files alone |
 | `m1_dr_robustness.png`, `m1_training_curves.png` | the training milestone: tracking error with and without randomization; reward curves |
 | `system_architecture.{dot,svg}`, `system_logic.{dot,svg}` | the two diagrams (Graphviz) |
+| `system_architecture_v2.{dot,svg}` | the v2 system (2026-10-20): one walking policy, the model on the CPU, the vision node; render with `dot -Tsvg docs/system_architecture_v2.dot -o docs/system_architecture_v2.svg` |
 | `r1_standing.png` | R1 standing under joint PD alone, W02 (with gains stiffer than the hardware's) |
 | `media/ldrq_pitch.mp4`, `media/cover.jpg` | the project video (3 min, 720p) and its cover, used on the front page |
 | `w07_walk_push_recovery.mp4`, `media/walk_push_recovery.gif` | the real robot walking and recovering from pushes, under a slack gantry |

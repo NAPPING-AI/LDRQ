@@ -1,5 +1,10 @@
 # System architecture: the LLM command layer and motion control (2026-09-30)
 
+> **Later additions.** This page describes the system of 2026-09-30 (v1), before the
+> camera. v2 is the same below the command layer; it adds the vision node
+> ([stageE_perception.md](stageE_perception.md)) and moves the model to the CPU. Its diagram
+> is [system_architecture_v2.svg](system_architecture_v2.svg).
+
 **The system in one sentence.** An operator types one English sentence on the robot. A
 local model writes it down as JSON, and deterministic code decides whether and how the
 robot moves. The operator confirms the parsed plan. A 10 Hz executor then steers the 50 Hz

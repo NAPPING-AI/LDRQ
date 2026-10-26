@@ -1,20 +1,158 @@
-# LDRQ: a Unitree R1 humanoid from simulation to English commands
+# LDRQ v2: a Unitree R1 humanoid that walks in four directions, on English commands
 
-[![tests](https://github.com/kedianwen/LDRQ/actions/workflows/tests.yml/badge.svg)](https://github.com/kedianwen/LDRQ/actions/workflows/tests.yml)
+[![tests](https://github.com/NAPPING-AI/LDRQ/actions/workflows/tests.yml/badge.svg)](https://github.com/NAPPING-AI/LDRQ/actions/workflows/tests.yml)
 [![license: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
-[![release](https://img.shields.io/github/v/release/kedianwen/LDRQ)](https://github.com/kedianwen/LDRQ/releases)
 
-[中文简介](README_zh.md)
+[中文](README_zh.md)
 
 A walking policy for the **Unitree R1** humanoid, trained in Isaac Lab, deployed on the
 robot's own Jetson Orin NX, measured against the simulator, and commanded in English
 through a small language model running on the robot.
+
+> **This is the `v2` branch.** The project has three versions, one per branch: `main`
+> (v1), `v2` (this one) and `v3` (V3). The overview of all three, with each version's
+> architecture, is the README on [`main`](https://github.com/NAPPING-AI/LDRQ/tree/main).
 
 <p align="center">
   <a href="docs/media/ldrq_pitch.mp4"><img src="docs/media/cover.jpg" width="720" alt="LDRQ: LLM-Driven Robotic Query-to-action. The Unitree R1 walking on the real robot, beside its simulation in Isaac Lab"></a>
   <br><em>Click for the 3-minute video (<a href="docs/media/ldrq_pitch.mp4">docs/media/ldrq_pitch.mp4</a>): training, deployment,
   the sim2real measurement, and English commands on the real robot.</em>
 </p>
+
+## v2 (this branch)
+
+### What v2 is
+
+v2 is v1 with a retrained walking policy, `v2_drift_ft` (run
+`2026-10-16_17-57-14_v2_drift_ft`):
+- it walks **backward** (to 0.6 m/s) and **sideways** (±0.5 m/s), and turns on the spot at
+  up to 1.57 rad/s, three times faster than v1;
+- on a zero command it steps in place without creeping forward: 0.14 m per 10 s in
+  simulation, against v1's 0.45 m;
+- it keeps v1's interface (425 inputs → 24 joint targets at 50 Hz) and gains, so the
+  bridge's C++, the joint map and the install path are unchanged.
+
+Around the policy:
+- the command layer walks in four directions (`walk backward 1m`, `walk left 3s`), from v2's
+  command range, which the installer writes into the bridge's configuration;
+- the language model moves to the CPU (4 threads), leaving the GPU to the control loop;
+- the vision node from stage E (`perception/`, YOLOX-Nano on the head camera's stream)
+  is in the code, for the steps `turn_to` and `walk_to`. Its engine and its coexistence
+  with the policy passed on the robot; the two steps themselves have not run there yet,
+  so `perception` is `off` in the quick start, as in the release.
+
+Released as [v2.0.0](https://github.com/kedianwen/LDRQ/releases/tag/v2.0.0) and deployed on
+the robot since 2026-10-20. This branch is that release. The full write-up is
+[docs/v2_policy.md](docs/v2_policy.md).
+
+### Architecture
+
+![v2 architecture](docs/system_architecture_v2.svg)
+
+An English sentence becomes a plan once, before the robot moves: the model only
+transcribes, deterministic code checks the plan against what the policy was trained on,
+and the operator confirms. Below that, the command layer (10 Hz), the policy (50 Hz) and
+the motor loop (500 Hz) each have their own safety checks.
+
+Compared with v1:
+- one more policy file, and a wider command range in the bridge;
+- the model on the CPU: with the detector and the policy sharing the GPU, the policy's
+  inference p99 stayed under 0.6 ms;
+- the vision node, which reads the head camera's left image over the robot's network
+  (UDP RTP, H264, port 5002), decodes it on the Jetson's hardware decoder and runs
+  YOLOX-Nano as a TensorRT FP16 engine (3.7 ms per frame).
+
+Source: [docs/system_architecture_v2.dot](docs/system_architecture_v2.dot). The page
+[docs/system_architecture.md](docs/system_architecture.md) explains the v1 system of
+2026-09-30, which is the same below the command layer; the vision node is
+[docs/stageE_perception.md](docs/stageE_perception.md).
+
+### Development order
+
+| step | dates (2026) | what was built | result |
+|---|---|---|---|
+| v1 (W01–W08, stages A–D) | to 10-02 | the v1 system and release v1.1.0; see `main` | — |
+| stage E, dev box | to 10-14 | the vision node: YOLOX-Nano, tracker, `turn_to` / `walk_to` steps, the camera guard; English prompt with the two steps | tests and simulated trials on the dev box |
+| stage E, robot | 10-14 | engine and parity on the Orin; the model moved to the CPU; coexistence of policy, detector and model | FP16 engine passes; policy p99 < 0.6 ms with everything running |
+| v2, diagnosis | 10-16 | v1's creep on a zero command measured as a bias of the policy (+0.046 m/s, in simulation) | zero was the edge of the trained range |
+| v2, training | 10-16 | four runs; the kept one trains the gait for 4000 iterations, then adds the drift penalty for 800 | creep 0.14 m per 10 s; 0 falls over 5 seeds × 256 envs |
+| v2, package | 10-16 to 10-20 | bundle, command layer in four directions; the vision node reads the head camera's stream (`source: stereo`) | dev box: bundle verified, ONNX vs PyTorch 1.5e-5 |
+| v2, robot | 10-20 | installed with `policy_pack`, engine rebuilt on the Orin; release v2.0.0 | walks backward and sideways, holds its place on a zero command |
+
+### Key parameters
+
+What changed from v1 is in bold; everything else is v1's (see `main`).
+
+| parameter | value | where it is set |
+|---|---|---|
+| interface | 425 → 24 at 50 Hz, as v1 | `models/v2_drift_ft/interface/` |
+| PD gains, `kp_scale` | as v1 (legs 100 / 2 ...); **1.3** on the robot | `interface/actuator_gains.json`, launch argument |
+| **command range** | **vx −0.6 → 1.0 m/s, vy ±0.5 m/s, wz ±1.57 rad/s** | `COMMAND_RANGES_FINAL_V2` in [tasks/r1_flat/flat_v2_env_cfg.py](tasks/r1_flat/flat_v2_env_cfg.py); written into `bridge.yaml` by the installer |
+| **zero-command envs** | **15 %** (v1: 2 %) | `flat_v2_env_cfg.py` |
+| **tracking reward** | v1's kernel (std 0.5) **plus a narrow one, std 0.15, weight 0.5** | same |
+| **drift penalty** | **planar velocity averaged over ~1 s on a zero command, weight −5, from iteration 4000 only** | same; `zero_command_drift` in `tasks/r1_flat/mdp` |
+| **foot-gap penalty** | **feet closer than 0.07 m sideways** | same |
+| **training** | **4000 + 800 iterations** (checkpoint `model_4799.pt`), 4096 envs, seed 42 | docstring of `flat_v2_env_cfg.py` |
+| **command layer** | **cruise backward 0.3 m/s, sideways 0.2 m/s**; forward 0.4 m/s, turns 0.4 rad/s | `mission_ctl/config/mission.yaml` |
+| **model placement** | **CPU, 4 threads** (`llm_num_gpu: 0`, `llm_num_thread: 4`) | same |
+| vision (stage E) | YOLOX-Nano, TensorRT **FP16**; one frame per 4 policy steps (12.5 Hz); confidence 0.30; 3 frames to confirm; a walk stops for a person within 1.2 m or an obstacle within 0.6 m | `perception/config/perception.yaml` |
+| camera | head stereo, left image, UDP RTP H264 on port 5002, 544 × 448; depth from `/dev/video-dep` (after `sudo unitree_depth_start`), which `walk_to` needs | same (`source: stereo`) |
+
+### Intermediate files
+
+| file | made by | in git |
+|---|---|---|
+| `logs/rsl_rl/r1_flat/2026-10-16_15-51-33_v2/` (stage 1), `..._17-57-14_v2_drift_ft/` (stage 2) | `scripts/train_r1.py` | no (GB); the kept policy is in `models/v2_drift_ft/` |
+| `models/v2_drift_ft/model_4799.pt`, `policy.pt`, `policy.onnx`, `parity_fixture.bin` | training, `scripts/play_r1.py` export, the fixture tool | yes (`SHA256SUMS`) |
+| `models/v2_drift_ft/interface/` (interface, gains) | `deploy/tools/dump_interface.py --run`, `dump_actuator_gains.py` | yes |
+| command-grid tables (drift, backward, sideways, turns) | `scripts/eval_command_grid.py` | the numbers are in [docs/v2_policy.md](docs/v2_policy.md) |
+| policy bundles `bundles/<run_id>/` (v2, and v1 for rollback) | `policy_pack/make_bundle.py --task-cfg tasks/r1_flat/flat_v2_env_cfg.py ...` | no; built into the quick-start archive |
+| `deploy/artifacts/policy_fp32.plan`, `installed.json` | `install_bundle.sh`, **on the robot**, after parity | no |
+| `bridge.yaml` command range | `install_bundle.sh` step 4, from the bundle's `command_envelope.json` | no: the committed file keeps v1's, and the installer rewrites it |
+| `perception/models/yolox_nano.onnx`, `dog.jpg` | `perception/models/fetch_yolox.sh` (sha256-pinned download) | no; in the quick-start archive |
+| `perception/models/yolox_fixture.bin` | `perception/tools/make_fixture.py` (YOLOX's sample image, as in stage E) | no; in the quick-start archive |
+| `perception/models/yolox_fp16.plan` | `r1_build_engine --fp16`, **on the robot** | no |
+| stage E results (engines, coexistence, simulated trials, English eval) | stage E tools | written up in [docs/stageE_perception.md](docs/stageE_perception.md) |
+
+### Quick start
+
+**Without a robot** (any machine with Python 3.8+; no GPU, no ROS):
+
+```bash
+git clone -b v2 https://github.com/NAPPING-AI/LDRQ.git && cd LDRQ
+
+# every check that needs no GPU, ROS or robot: command layer, English front end,
+# objects (stage E), perception, eval sets, policy packaging, both policies' SHA256,
+# Markdown links, dry runs. CI runs the same script.
+./run_tests.sh
+
+# a plan with the v2 policy's command range: backward and sideways exist
+printf '{"vx": [-0.6, 1.0], "vy": [-0.5, 0.5], "wz": [-1.57, 1.57]}' > /tmp/v2_env.json
+python3 mission_ctl/r1_mission_cli.py run "walk backward 1m; walk left 2s; turn right 180@1.0" --dry-run --envelope /tmp/v2_env.json
+
+# an object step in a simulated room: turn to the chair, walk to 1.2 m from it
+python3 mission_ctl/r1_mission_cli.py run "walk_to the chair stop_at 1.2; turn left 90" --dry-run --world mission_ctl/tests/worlds/room.json
+```
+
+To try the English front end as well, run [Ollama](https://ollama.com) with
+`ollama pull qwen3:1.7b`, then
+`python3 mission_ctl/r1_mission_cli.py ask "walk backward for 3 seconds, then turn left" --dry-run --envelope /tmp/v2_env.json`.
+
+**On the robot:** [quickstart/ldrq-v2-quickstart.tar.gz](quickstart/ldrq-v2-quickstart.tar.gz)
+(about 9 MB) is everything v2 runs on the robot: the bridge and policy node as source,
+built there; `policy_pack`; `mission_ctl`; the model server's scripts; the v2 policy bundle
+and v1's for rollback; the vision node with YOLOX-Nano and its parity fixture; and a
+self-test. The language model's runtime and weights (about 1.8 GB) are too large for git;
+the guide says where to get them. [quickstart/make_quickstart.sh](quickstart/make_quickstart.sh)
+rebuilds the archive from the committed tree.
+
+### Robot guide
+
+[quickstart/ROBOT_GUIDE.md](quickstart/ROBOT_GUIDE.md) (中文
+[quickstart/ROBOT_GUIDE_zh.md](quickstart/ROBOT_GUIDE_zh.md)): from copying the archive
+to the robot to walking backward and sideways on an English command, upgrading from v1,
+rolling back, and the optional vision checks. Read
+[*Running on the robot*](#running-on-the-robot) below first.
 
 ## Results at a glance
 
@@ -34,55 +172,6 @@ through a small language model running on the robot.
 The full account is [docs/technical_report.md](docs/technical_report.md); how the work was
 organized and what each step found is [docs/project_history.md](docs/project_history.md).
 
-## How it fits together
-
-![System architecture](docs/system_architecture.svg)
-
-An English sentence becomes a plan once, before the robot moves: the model only
-transcribes, deterministic code checks the plan against what the policy was trained on,
-and the operator confirms. Below that, the command layer (10 Hz), the policy (50 Hz) and
-the motor loop (500 Hz) each have their own safety checks. Details and the logic diagram:
-[docs/system_architecture.md](docs/system_architecture.md).
-
-## Quick start
-
-Pick the row that matches what you have. Everything in the first two rows runs on any
-machine with Python 3.8+, with no GPU, no ROS and no robot.
-
-| you want to… | do this | time |
-|---|---|---|
-| **understand the project** | read [docs/technical_report.md](docs/technical_report.md) (the whole project in one document), then [docs/system_architecture.md](docs/system_architecture.md) (how a sentence becomes motor commands) | 30 min |
-| **run something now** | the commands below | 2 min |
-| **train or evaluate in simulation** | an NVIDIA GPU with Isaac Lab 2.1 / Isaac Sim 4.5 → [*Reproducing*](#reproducing) and [*Reproducing a training run*](#reproducing-a-training-run) | 1 h to set up, 1.5 h per training run |
-| **run it on an R1** | an R1 EDU (onboard Orin NX) → download the robot release ([Releases](https://github.com/kedianwen/LDRQ/releases): `release_v2.0.0.tar.gz` + the model archive) and follow its README ([release/README.md](release/README.md), 中文 [release/README_zh.md](release/README_zh.md)); read [*Running on the robot*](#running-on-the-robot) first | an hour |
-
-```bash
-git clone https://github.com/kedianwen/LDRQ.git && cd LDRQ
-
-# every check that needs no GPU, ROS or robot (~3 s, standard library only):
-# command layer, English front end, eval sets, coexistence selftest,
-# policy packaging, the deployed policy's SHA256, Markdown links, a dry run.
-# CI runs the same script.
-./run_tests.sh
-
-# what the robot says it can do, generated from the deployed configuration
-python3 mission_ctl/r1_mission_cli.py capability
-
-# a plan, compiled, checked and simulated against a stand-in robot; nothing moves
-python3 mission_ctl/r1_mission_cli.py run "walk 3s@0.3; turn left 90" --dry-run
-
-# the same with the v2 policy's command range: backward and sideways exist
-printf '{"vx": [-0.6, 1.0], "vy": [-0.5, 0.5], "wz": [-1.57, 1.57]}' > /tmp/v2_env.json
-python3 mission_ctl/r1_mission_cli.py run "walk backward 1m; walk left 2s" --dry-run --envelope /tmp/v2_env.json
-```
-
-To try the English front end as well, run [Ollama](https://ollama.com) with
-`ollama pull qwen3:1.7b`, then
-`python3 mission_ctl/r1_mission_cli.py ask "walk forward for 3 seconds, then turn left" --dry-run`.
-It prints the parsed plan, or the reason it refuses. The plotting and video tools need
-`pip install -r requirements.txt`; [requirements.txt](requirements.txt) also says where
-the simulation, TensorRT and robot dependencies come from.
-
 ## Layout
 
 | folder | what it is | built in | start with |
@@ -99,6 +188,7 @@ the simulation, TensorRT and robot dependencies come from.
 | `perception/` | object detection (YOLOX-Nano, TensorRT) for `turn_to` / `walk_to`: the node, calibration and evaluation tools; robot pending | stage E | [perception/README.md](perception/README.md) |
 | `release/` | the robot-side release: install and usage READMEs (English, 中文), the robot self-test, and `make_release.sh`, which builds the release assets from the committed tree | v1.1.0, v2.0.0 | [release/README.md](release/README.md) |
 | `docs/` | results: the technical report, per-stage write-ups, figures, robot evidence | all | [docs/README.md](docs/README.md) |
+| `quickstart/` | the v2 quick-start archive for the robot, the script that builds it, and the robot guide (English, 中文) | 2026-10-26 | [quickstart/ROBOT_GUIDE.md](quickstart/ROBOT_GUIDE.md) |
 
 The W07 snapshot of the robot's deploy tree (Orin-built binaries and engines, extracted
 to `~/kdw_deploy` on the robot) is a [GitHub Release](https://github.com/kedianwen/LDRQ/releases/tag/orin-snapshot-w07),

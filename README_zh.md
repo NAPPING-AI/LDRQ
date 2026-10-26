@@ -27,7 +27,7 @@
 |---|---|---|---|---|---|
 | **`main`**（本分支） | **v1** | 向前走（最快 1.0 m/s）、原地转向（最快 0.5 rad/s）；用英文下指令，模型跑在机器人上 | 发布为 v1.1.0；2026-10-02 至 10-20 在真机上使用 | [ldrq-v1-quickstart.tar.gz](quickstart/ldrq-v1-quickstart.tar.gz) | [ROBOT_GUIDE_zh.md](quickstart/ROBOT_GUIDE_zh.md) |
 | [`v2`](https://github.com/NAPPING-AI/LDRQ/tree/v2) | **v2** | 在 v1 基础上能**后退**、**横移**，转向最快 1.57 rad/s，零指令时不再往前漂；模型改到 CPU 上；加入视觉节点（stage E） | 发布为 v2.0.0；2026-10-20 起在真机上使用 | `v2` 分支的 `quickstart/ldrq-v2-quickstart.tar.gz` | `v2` 分支的 `quickstart/ROBOT_GUIDE_zh.md` |
-| [`v3`](https://github.com/NAPPING-AI/LDRQ/tree/v3) | **V3** | 在 v2 基础上加一个**跳舞**策略，与 v2 并行；加一个**近距反射**：人靠得太近时交给 v2 后退 | 2026-10-24 吊装、电机输出开，已在真机上验证；发布为 v3.0.0 | `v3` 分支的 `quickstart/ldrq-v3-quickstart.tar.gz`；release [v3.0.0](https://github.com/NAPPING-AI/LDRQ/releases/tag/v3.0.0) | `v3` 分支的 `quickstart/ROBOT_GUIDE_zh.md` |
+| [`v3`](https://github.com/NAPPING-AI/LDRQ/tree/v3) | **V3** | 在 v2 基础上加一个**跳舞**策略，与 v2 并行；加一个**近距反射**：人靠得太近时交给 v2 后退 | 2026-10-24 吊装、电机输出开，已在真机上验证；发布为 v3.0.1 | `v3` 分支的 `quickstart/ldrq-v3-quickstart.tar.gz`；release [v3.0.1](https://github.com/NAPPING-AI/LDRQ/releases/tag/v3.0.1) | `v3` 分支的 `quickstart/ROBOT_GUIDE_zh.md` |
 
 三个版本的关系：
 - **v2** 沿用 v1 的接口重训行走策略（425 维输入 → 24 个关节目标，50 Hz，增益相同）。策略以上的部分基本不变，只有两处改动：指令层读取 v2 更宽的速度范围，模型改到 CPU 上运行。

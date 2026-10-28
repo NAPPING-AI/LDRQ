@@ -91,7 +91,8 @@ stages closed by 2026-10-02 (release v1.1.0). Three additions followed, each on 
   2026-10-20;
 - V3 (a dance policy and a person reflex), run in the gantry with the motors on on
   2026-10-24, released as v3.0.1 (v3.0.0, the same code, was published first, while its
-  documents still called it a pre-release).
+  documents still called it a pre-release). v3.0.2 (2026-10-28) holds the head where it is
+  when driving starts: at the URDF zero it turned about 43 degrees to the right.
 
 What was left out at the close is listed under each of them below.
 

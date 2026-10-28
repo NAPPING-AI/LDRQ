@@ -27,7 +27,7 @@ if [[ -f base/deploy/artifacts/installed.json ]]; then
   echo "  base/ has a policy installed ($(python3 -c "import json;print(json.load(open('base/deploy/artifacts/installed.json')).get('run_id'))" 2>/dev/null)): checking its files, model and runtime only"
   ( cd base && sha256sum --quiet -c FILES.sha256 ) && ok "base files match base/FILES.sha256" || bad "base files differ from base/FILES.sha256"
   ( cd base/llm/models 2>/dev/null && sha256sum --quiet -c MODEL.sha256 ) && ok "model files match MODEL.sha256" \
-    || bad "no model, or it differs: extract qwen3-1.7b_r1-robot-*.tar.gz in the same directory as the release"
+    || bad "no model, or it differs: from v3.0.2 on the model is v3.0.0's archive, extracted with --strip-components=1 into this directory (README.md, Install step 2)"
   [[ -x base/llm/ollama/bin/ollama ]] && ok "ollama runtime present" || bad "base/llm/ollama/bin/ollama missing or not executable"
 else
   bash base/selftest.sh | sed -n '2,$p' | grep -v '^selftest:'

@@ -1,41 +1,28 @@
-# r1-robot v@VERSION@ (V3): a dance, and stepping back from people
+# r1-robot v@VERSION@ (V3): the head stays where it is
 
-**Final release of the project.** V3 ran on the robot in a gantry, with the output off and
-with the motors on (2026-10-24); that completed the project's engineering (2026-10-26). It
-was validated in the gantry only and has never run untethered.
+**A patch to v3.0.1:** on the robot, the head no longer turns to the right when the stack
+starts. Nothing else changed. V3 is validated in the gantry only and has never run
+untethered.
 
-**Supersedes v3.0.0**, which is the same code, published first while its documents still
-called it a pre-release.
+- **The fix.** The policy does not drive the two head joints, so the bridge holds them. Up
+  to v3.0.1 it held them at the URDF zero. On the robot, that turned the head about 43
+  degrees to the right every time driving started, along with the first steps in place.
+  The cause: with the head facing straight ahead, the head encoder does not read 0, and the
+  reading changes between sessions (+0.75 rad in one, +2.11 in the next, the same day).
+  The bridge now holds the head where it is when driving starts, and logs that pose
+  (`head held where it is: ...`). It feeds the policy the head's offset from that pose, so
+  the policy sees the head at 0, as in training.
+- **What the operator does:** face the head straight ahead before starting the stack. In
+  developer mode the head has no stiffness, and its pitch can sag: set it by hand.
+- **On the robot, 2026-10-28 (gantry, motors on):** the head stayed still as driving
+  started and while the robot stepped in place.
 
-- **A dance policy** (`dance_wave`, run `2026-10-23_16-51-44_wave`, trained with BeyondMimic's
-  motion tracking): a 10 s routine on the spot, both feet on the floor.
-  `ask "dance for 20 seconds"` starts it only if nobody is within 1 m. A dance ends at the
-  end of a bar, on Ctrl-C at the next bar, and lasts at most 60 s.
-- **Two policies in one runner.** v2 (the walking policy, unchanged) and the dance policy
-  are inferred every control step: at most 2.7 ms together at p99 on the Orin. A state
-  machine in the bridge (the conductor) chooses which one drives the motors.
-- **A person reflex in the bridge.** Within 0.6 m of a person (0.9 m while dancing), v2
-  takes over on the same control step and steps back for 1.5 s (about 0.33 m). The robot
-  then stands until the operator confirms a new plan. The language model is not in this
-  loop.
-- **Vision:** the head camera's left image over the robot's network, and YOLOX-Nano as a
-  TensorRT FP16 engine built on the robot. A person's distance comes from the height of
-  their box (`person_box_k`, calibrated without tape).
-- **One install script.** `install.sh` installs V3 into its own tree, `r1-robot-v@VERSION@/v3/`.
-  It does this the way the robot was installed on 2026-10-24: the v2 bundle into `base/`,
-  the vision engine, then `install_v3.sh`. Every engine is built on the robot and gated by
-  parity. `base/` stays a working v2 tree for rollback.
+Everything else is as in v3.0.1: the dance policy, two policies in one runner, the person
+reflex, vision, and the one install script. See `README.md` in the archive, and the
+[v3.0.0 release](https://github.com/NAPPING-AI/LDRQ/releases/tag/v3.0.0) notes for the
+V3 features.
 
-**On the robot, 2026-10-24 (gantry):**
-- the bridge stayed RUNNING throughout;
-- the robot danced and handed back to v2 at the end of a bar, and stopped at the next bar
-  on Ctrl-C;
-- it stepped back from the dance when a person came within 0.79–0.88 m;
-- a dance asked for with someone too close was refused.
-
-**In simulation:** 0 falls in 2017 normal and 2044 emergency handovers.
-
-**Known limits:**
+**Known limits** (unchanged):
 - validated in the gantry only, never untethered: keep it in the gantry;
 - the reflex acts on people only: obstacles would need depth from the two head images, which was not finished;
 - the camera looks forward only, so the robot backs off into space it cannot see;
@@ -46,10 +33,18 @@ called it a pre-release.
 | file | | |
 |---|---|---|
 | `release_v@VERSION@.tar.gz` | about 0.5 GB | code, both walking bundles (v2, v1), the dance policy, YOLOX-Nano, the Ollama runtime for JetPack 5, install.sh, READMEs (English, 中文) |
-| `qwen3-1.7b_r1-robot-v@VERSION@.tar.gz` | 1.3 GB | the language model; it extracts into the same directory |
 | `SHA256SUMS` | | `sha256sum -c SHA256SUMS` |
 
-Both archives extract to `~/r1-robot-v@VERSION@`. Earlier trees (`~/r1-robot-v1.1.0`,
-`~/r1-robot-v2.0.0`, `~/r1-robot-v3`) are left alone. Install, use and safety: `README.md` /
-`README_zh.md` in the archive. Built from git `@GIT@` (branch `v3`); the detailed account is
-`v3/README.md` there.
+**The language model is not attached.** Use `qwen3-1.7b_r1-robot-v3.0.0.tar.gz` from the
+[v3.0.0 release](https://github.com/NAPPING-AI/LDRQ/releases/tag/v3.0.0), the same
+qwen3:1.7b (sha256 `7713eadc2c0c8aee9565322994a1d21355fe6ed44a5fb7d39a33d30334780f0a`).
+Extract it into this release's directory:
+
+```bash
+tar xzf release_v@VERSION@.tar.gz
+tar xzf qwen3-1.7b_r1-robot-v3.0.0.tar.gz --strip-components=1 -C r1-robot-v@VERSION@
+```
+
+Everything extracts to `~/r1-robot-v@VERSION@`. Earlier trees (`~/r1-robot-v3`,
+`~/r1-robot-v3.0.0`, `~/r1-robot-v3.0.1`, ...) are left alone. Built from git `@GIT@`
+(branch `v3`); the detailed account is `v3/README.md` there.

@@ -117,6 +117,7 @@ not finished.
 | robot, motors on (gantry) | 10-24 | the dance, Ctrl-C, a person walking up, refusal | RUNNING throughout; stepped back at 0.79–0.88 m |
 | fixes | 10-24 to 10-26 | the reply for a dance step; the dry run's bridge stepped at 50 Hz; depth from the two images (dev box, started, not finished) | — |
 | close | 10-26 | the gantry runs accepted as the end of the engineering work; release v3.0.1 | project complete |
+| head fix | 10-28 | the bridge holds the head where it is when driving starts (at the URDF zero it turned ~43° right); release v3.0.2 | head still on the robot, gantry, motors on |
 
 ### Key parameters
 
@@ -170,9 +171,10 @@ python3 mission_ctl/r1_mission_cli.py run "dance 12s" --dry-run --world mission_
 The C++ checks in `v3/run_tests.sh` need g++ with C++17; the bridge itself builds on a
 dev box against a fake robot (see [v3/README.md](v3/README.md#on-a-dev-box)).
 
-**On the robot, from the release:** [v3.0.1](https://github.com/NAPPING-AI/LDRQ/releases/tag/v3.0.1)
-has everything in two archives, the language model included, and one install
-script: `install.sh` installs V3 the way the robot was installed on 2026-10-24. Its README
+**On the robot, from the release:** [v3.0.2](https://github.com/NAPPING-AI/LDRQ/releases/tag/v3.0.2)
+has the code in one archive and one install script; the language model is v3.0.0's archive,
+the same qwen3:1.7b ([v3.0.0](https://github.com/NAPPING-AI/LDRQ/releases/tag/v3.0.0)).
+`install.sh` installs V3 the way the robot was installed on 2026-10-24. Its README
 is [v3/release/README.md](v3/release/README.md) (中文 [README_zh.md](v3/release/README_zh.md)): install,
 every session, commands, acceptance checks, calibration, troubleshooting, rollback.
 `v3/release/make_release_v3.sh` builds it from the committed tree.

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Dev box: the V3 robot release, from the COMMITTED tree.
 #
-#   bash v3/release/make_release_v3.sh --runtime <dir> [--version 3.0.1] [--out <dir>]
+#   bash v3/release/make_release_v3.sh --runtime <dir> [--version 3.0.2] [--out <dir>] [--no-model]
 #
 # <dir> holds llm/ollama/ (Ollama v0.34.4 arm64 + jetpack5, unpacked) and llm/models/ (an
 # Ollama model store with qwen3:1.7b), as release/make_release.sh takes it; the v2.0.0
@@ -10,6 +10,8 @@
 # Writes to <out> (default ./dist/v<V>):
 #   release_v<V>.tar.gz                 everything but the model, unpacking to r1-robot-v<V>/
 #   qwen3-1.7b_r1-robot-v<V>.tar.gz     the model, into r1-robot-v<V>/base/llm/models/
+#                                       (not with --no-model: v3.0.2 points to v3.0.0's, the
+#                                       same qwen3:1.7b, extracted with --strip-components=1)
 #   SHA256SUMS, RELEASE_NOTES.md
 # r1-robot-v<V>/ holds:
 #   README.md, README_zh.md, install.sh, selftest.sh, VERSION, licenses, FILES.sha256
@@ -24,7 +26,7 @@
 # deploy/.venv/bin/python) needs numpy, onnxruntime and OpenCV, for the YOLOX fixture.
 set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-V=3.0.1; RUNTIME=""; OUT=""; MODEL=qwen3; TAGM=1.7b
+V=3.0.2; RUNTIME=""; OUT=""; MODEL=qwen3; TAGM=1.7b; WITH_MODEL=1
 PY="${PYTHON:-python3}"
 FPY="${FIXTURE_PYTHON:-$REPO/deploy/.venv/bin/python}"
 while [[ $# -gt 0 ]]; do
@@ -32,13 +34,14 @@ while [[ $# -gt 0 ]]; do
     --runtime) RUNTIME="$2"; shift 2 ;;
     --version) V="$2"; shift 2 ;;
     --out) OUT="$2"; shift 2 ;;
+    --no-model) WITH_MODEL=0; shift ;;
     *) echo "unknown argument: $1"; exit 2 ;;
   esac
 done
 OUT="${OUT:-$REPO/dist/v$V}"
 [[ -x "$RUNTIME/llm/ollama/bin/ollama" ]] || { echo "--runtime: no llm/ollama/bin/ollama under '$RUNTIME'"; exit 2; }
 MAN="$RUNTIME/llm/models/manifests/registry.ollama.ai/library/$MODEL/$TAGM"
-[[ -f "$MAN" ]] || { echo "--runtime: no $MODEL:$TAGM manifest under $RUNTIME/llm/models"; exit 2; }
+[[ $WITH_MODEL -eq 0 || -f "$MAN" ]] || { echo "--runtime: no $MODEL:$TAGM manifest under $RUNTIME/llm/models"; exit 2; }
 cd "$REPO"
 git diff --quiet HEAD -- . ':!dist' ':!quickstart/*.tar.gz*' \
   || { echo "uncommitted changes: commit first, the release is built from HEAD"; exit 2; }
@@ -101,6 +104,7 @@ printf 'r1-robot v%s (V3)\ngit %s\nbuilt %s\nwalking policy 2026-10-16_17-57-14_
 ( cd "$R" && find . -maxdepth 1 -type f ! -name FILES.sha256 -printf '%P\n' | sort \
     | xargs -d '\n' sha256sum > FILES.sha256 )
 
+if [[ $WITH_MODEL -eq 1 ]]; then
 echo "== model $MODEL:$TAGM"
 M="$WORK/model/$NAME/base/llm/models"
 mkdir -p "$M/blobs" "$(dirname "$M/manifests/registry.ollama.ai/library/$MODEL/$TAGM")"
@@ -112,15 +116,17 @@ for x in [m["config"]] + m["layers"]:
     print(x["digest"].replace(":", "-"))
 PY
 ( cd "$M" && find . -type f ! -name MODEL.sha256 -printf '%P\n' | sort | xargs -d '\n' sha256sum > MODEL.sha256 )
+fi
 
 echo "== archives"
 MAIN="release_v$V.tar.gz"; MOD="$MODEL-${TAGM}_r1-robot-v$V.tar.gz"
+ASSETS=("$MAIN"); [[ $WITH_MODEL -eq 1 ]] && ASSETS+=("$MOD")
 tar -C "$WORK/main" "${TAROPT[@]}" -cf - "$NAME" | gzip -n -6 > "$OUT/$MAIN"
-tar -C "$WORK/model" "${TAROPT[@]}" -cf - "$NAME" | gzip -n -6 > "$OUT/$MOD"
+[[ $WITH_MODEL -eq 1 ]] && tar -C "$WORK/model" "${TAROPT[@]}" -cf - "$NAME" | gzip -n -6 > "$OUT/$MOD"
 sed -e "s/@VERSION@/$V/g" -e "s/@GIT@/${SHA:0:12}/g" v3/release/RELEASE_NOTES.md > "$OUT/RELEASE_NOTES.md"
-( cd "$OUT" && sha256sum "$MAIN" "$MOD" > SHA256SUMS && ls -l "$MAIN" "$MOD" && cat SHA256SUMS )
+( cd "$OUT" && sha256sum "${ASSETS[@]}" > SHA256SUMS && ls -l "${ASSETS[@]}" && cat SHA256SUMS )
 LIMIT=$((2*1024*1024*1024))
-for f in "$OUT/$MAIN" "$OUT/$MOD"; do
+for f in "${ASSETS[@]/#/$OUT/}"; do
   [[ $(stat -c %s "$f") -lt $LIMIT ]] || { echo "$f is over GitHub's 2 GiB asset limit"; exit 1; }
 done
 echo "done: $OUT"

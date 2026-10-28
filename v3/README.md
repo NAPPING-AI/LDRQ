@@ -75,22 +75,23 @@ yet:
   change" does not work, because room light changes the shell's brightness as the robot
   turns. The shell's edge is fixed in every frame and is the better cue.
 
-## The head's zero (2026-10-28)
+## The head (2026-10-28)
 
-The policy does not drive the two head joints; the bridge holds them at the URDF default
+The policy does not drive the two head joints; the bridge held them at the URDF default
 (0, 0). On the robot that turned the head about 43 degrees to the right every time driving
-started, together with the first steps in place. The head's encoder zero is not the URDF
-zero: with the head facing straight ahead (as the factory controller leaves it, output
-off), `head_yaw_joint` reads +0.7519 rad.
+started, together with the first steps in place. The head's encoder reading with the head
+facing straight ahead is not 0, and it is not the same from one session to the next:
+`head_yaw_joint` read +0.7519 rad, and later the same day +2.109 (the bridge's own log).
+So no fixed offset in bridge.yaml is right.
 
-The bridge now takes `head_pitch_zero` and `head_yaw_zero` (bridge.yaml: the readings with
-the head facing straight ahead). They move both the hold target and the observation, so
-the policy still sees the head at 0, as in training. The bridge warns when a head joint
-would jump more than 0.15 rad as driving starts. `head_pitch_zero` is still 0, not
-measured yet.
+The bridge now holds the head where it is when driving starts, and logs that pose
+(`head held where it is: pitch ... yaw ... rad (encoder)`). The head's observation is its
+offset from that pose (0 before driving and while degraded), so the policy sees it at 0,
+as in training. Start with the head facing ahead.
 
-`watch_obs.py --check-default` now shows the head joints off by their zero values. That is
-expected.
+`watch_obs.py` therefore shows the head joints near 0, not their encoder readings; the
+bridge's log line has those. `watch_obs.py --check-default` shows the head joints as a
+mismatch. That is expected.
 
 ## The reflex
 

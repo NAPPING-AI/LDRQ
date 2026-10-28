@@ -50,8 +50,8 @@ TEST(JointMap, ActionMapIsInjectiveAndLeavesTwoJointsUndriven)
 
 TEST(JointMap, TheUndrivenJointsAreTheHeadAtSlots29And30)
 {
-  // bridge_node.cpp applies head_pitch_zero / head_yaw_zero at articulation 8 and
-  // 13. If a regenerated map moved the head, the offsets would land on a leg.
+  // bridge_node.cpp holds articulation 8 and 13 where they are when driving starts
+  // (kHead). If a regenerated map moved the head, that hold would land on a leg.
   std::set<int> undriven;
   for (std::size_t j = 0; j < kNumJoints; ++j) {undriven.insert(static_cast<int>(j));}
   for (std::size_t a = 0; a < kNumActions; ++a) {undriven.erase(kActionToArt[a]);}

@@ -14,11 +14,6 @@
     # endpoint of the ramp is a known quantity instead of a guessed number.
     kp_scale: 1.0
     kd_scale: 1.0            # also the damping used in the degraded state
-    # The head's encoder readings at the URDF zero (facing straight ahead). Measured
-    # 2026-10-28 with the factory controller holding the head forward, output off:
-    # head_yaw +0.7519. At 0 the bridge held the head ~43 deg to the right.
-    head_pitch_zero: 0.0     # PROBE: same reading, head_pitch_joint
-    head_yaw_zero: 0.7519
     lowstate_timeout_ms: 100.0
     target_timeout_ms: 60.0  # 3 control cycles at 50 Hz
     min_control_rate_hz: 45.0

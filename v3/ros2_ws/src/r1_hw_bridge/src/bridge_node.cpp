@@ -134,15 +134,6 @@ public:
     // absolute number, so the endpoint of the ramp is known rather than guessed.
     kp_scale_ = declare_parameter<double>("kp_scale", 1.0);
     kd_scale_ = declare_parameter<double>("kd_scale", 1.0);
-    // The head's encoder zero is not the URDF zero. Measured 2026-10-28: with the
-    // head facing straight ahead (as the factory controller leaves it), head_yaw
-    // reads +0.752 rad, so holding it at the URDF default turned it ~43 deg to the
-    // right on every start. These are the readings at the URDF zero; they shift
-    // both the hold target and the observation, so the policy still sees the
-    // head where training had it.
-    joint_zero_.fill(0.0f);
-    joint_zero_[kHeadPitch] = static_cast<float>(declare_parameter<double>("head_pitch_zero", 0.0));
-    joint_zero_[kHeadYaw] = static_cast<float>(declare_parameter<double>("head_yaw_zero", 0.0));
     state_timeout_ms_ = declare_parameter<double>("lowstate_timeout_ms", 100.0);
     target_timeout_ms_ = declare_parameter<double>("target_timeout_ms", 60.0);
     min_rate_hz_ = declare_parameter<double>("min_control_rate_hz", 45.0);
@@ -285,8 +276,6 @@ public:
                 kp_scale_, kd_scale_,
                 kKp[0] * kp_scale_, kKd[0] * kd_scale_,
                 kKp[16] * kp_scale_, kKp[8] * kp_scale_, kKd[8] * kd_scale_);
-    RCLCPP_INFO(get_logger(), "head zero (encoder reading at the URDF zero): pitch %+.4f yaw %+.4f rad",
-                joint_zero_[kHeadPitch], joint_zero_[kHeadYaw]);
     if (kp_scale_ > 1.0 || kd_scale_ > 1.0) {
       RCLCPP_WARN(get_logger(),
                   "kp_scale/kd_scale above 1.0 exceeds the trained gains -- the "
@@ -322,7 +311,7 @@ private:
   static_assert(kNumActions == 24, "joint_map.hpp regenerated from a different run");
   static_assert(kFrameDim == 85, "frame width no longer matches the policy");
   // The two joints the policy does not drive (test_joint_map checks which).
-  static constexpr std::size_t kHeadPitch = 8, kHeadYaw = 13;
+  static constexpr std::array<std::size_t, 2> kHead = {8, 13};   // head_pitch, head_yaw
 
   // ---------------------------------------------------------- robot ingress
   void OnRobotState(const RobotState & s)
@@ -532,7 +521,11 @@ private:
     // has never seen anything like it.
     const std::size_t jpos0 = k;
     for (std::size_t j = 0; j < kNumJoints; ++j) {
-      frame_[k++] = s.motor[kJointSlot[j]].q - joint_zero_[j] - kDefaultPos[j];
+      frame_[k++] = s.motor[kJointSlot[j]].q - kDefaultPos[j];
+    }
+    // The head: relative to where it is held (HeadObs), as training had it fixed.
+    for (std::size_t h = 0; h < 2; ++h) {
+      frame_[jpos0 + kHead[h]] = HeadObs(h, s.motor[kJointSlot[kHead[h]]].q);
     }
     const std::size_t jvel0 = k;
     for (std::size_t j = 0; j < kNumJoints; ++j) {
@@ -637,6 +630,7 @@ private:
     // exchange, not check-then-set: the observation timer and the command
     // thread can trip this in the same instant.
     if (state_.exchange(State::Degraded) == State::Degraded) {return;}
+    head_latched_.store(false);   // damping now; held again where it is on resume
     {
       std::lock_guard<std::mutex> lock(reason_mutex_);
       degrade_reason_ = why;
@@ -686,7 +680,7 @@ private:
       if (state_.load() == State::WaitingPolicy && target_fresh) {
         state_.store(State::Running);
         PublishStatus();
-        if (state_fresh) {WarnHeadSwing(s);}
+        LatchHead(s);
       } else if (state_.load() == State::Running && !target_fresh) {
         Degrade("joint_target stale");
       }
@@ -741,7 +735,7 @@ private:
       for (std::size_t j = 0; j < kNumJoints; ++j) {
         if (!IsActuated(j)) {
           auto & m = cmd[kJointSlot[j]];
-          m.q = kDefaultPos[j] + joint_zero_[j];
+          m.q = j == kHead[0] ? head_hold_[0].load() : head_hold_[1].load();
           m.kp = static_cast<float>(kKp[j] * kp_scale_);
           m.kd = static_cast<float>(kKd[j] * kd_scale_);
         }
@@ -760,19 +754,25 @@ private:
     }
   }
 
-  // Driving starts by pulling the head to its hold pose at full stiffness. A big
-  // step there means head_*_zero does not match this robot.
-  void WarnHeadSwing(const RobotState & s)
+  // The head is held where it is when driving starts, not at the URDF default.
+  // Its encoder reading facing straight ahead is not 0 and not even the same from
+  // one session to the next (2026-10-28: +0.752, then +2.109 with the head ahead
+  // both times), so holding it at 0 swung it ~43 deg to the right on every start
+  // and no fixed offset is right. The operator starts with the head facing ahead.
+  void LatchHead(const RobotState & s)
   {
-    for (std::size_t j : {kHeadPitch, kHeadYaw}) {
-      const float step = kDefaultPos[j] + joint_zero_[j] - s.motor[kJointSlot[j]].q;
-      if (std::fabs(step) > 0.15f) {
-        RCLCPP_WARN(get_logger(),
-          "%s jumps %+.2f rad as driving starts: check head_pitch_zero / head_yaw_zero "
-          "(the reading with the head facing straight ahead)",
-          j == kHeadYaw ? "head_yaw" : "head_pitch", step);
-      }
-    }
+    for (std::size_t h = 0; h < 2; ++h) {head_hold_[h].store(s.motor[kJointSlot[kHead[h]]].q);}
+    head_latched_.store(true);
+    RCLCPP_INFO(get_logger(), "head held where it is: pitch %+.4f yaw %+.4f rad (encoder)",
+                head_hold_[0].load(), head_hold_[1].load());
+  }
+
+  // In training the head was fixed at the default, so the policy saw 0 for it.
+  // While it is held, the observation is its offset from the hold; before that
+  // (and while degraded) it is 0.
+  float HeadObs(std::size_t h, float q) const
+  {
+    return head_latched_.load() ? q - head_hold_[h].load() : 0.0f;
   }
 
   static bool IsActuated(std::size_t art)
@@ -1140,7 +1140,9 @@ private:
   steady_clock::time_point last_target_time_, last_cmdvel_time_;
 
   std::vector<float> frame_;
-  std::array<float, kNumJoints> joint_zero_{};   // head_pitch_zero / head_yaw_zero; 0 elsewhere
+  // Written by the command thread when driving starts, read by the observation too.
+  std::array<std::atomic<float>, 2> head_hold_{};
+  std::atomic<bool> head_latched_{false};
   std_msgs::msg::Float32MultiArray obs_msg_;
   // Read and written from both the ROS executor and the command thread.
   std::atomic<State> state_{State::WaitingState};

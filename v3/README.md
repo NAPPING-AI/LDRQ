@@ -75,6 +75,23 @@ yet:
   change" does not work, because room light changes the shell's brightness as the robot
   turns. The shell's edge is fixed in every frame and is the better cue.
 
+## The head's zero (2026-10-28)
+
+The policy does not drive the two head joints; the bridge holds them at the URDF default
+(0, 0). On the robot that turned the head about 43 degrees to the right every time driving
+started, together with the first steps in place. The head's encoder zero is not the URDF
+zero: with the head facing straight ahead (as the factory controller leaves it, output
+off), `head_yaw_joint` reads +0.7519 rad.
+
+The bridge now takes `head_pitch_zero` and `head_yaw_zero` (bridge.yaml: the readings with
+the head facing straight ahead). They move both the hold target and the observation, so
+the policy still sees the head at 0, as in training. The bridge warns when a head joint
+would jump more than 0.15 rad as driving starts. `head_pitch_zero` is still 0, not
+measured yet.
+
+`watch_obs.py --check-default` now shows the head joints off by their zero values. That is
+expected.
+
 ## The reflex
 
 The reflex runs in the bridge, once per control step, between mission_ctl's velocity

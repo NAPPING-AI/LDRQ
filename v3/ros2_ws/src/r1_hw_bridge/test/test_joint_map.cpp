@@ -48,6 +48,18 @@ TEST(JointMap, ActionMapIsInjectiveAndLeavesTwoJointsUndriven)
   EXPECT_EQ(kNumJoints - seen.size(), 2u) << "exactly the two head joints";
 }
 
+TEST(JointMap, TheUndrivenJointsAreTheHeadAtSlots29And30)
+{
+  // bridge_node.cpp applies head_pitch_zero / head_yaw_zero at articulation 8 and
+  // 13. If a regenerated map moved the head, the offsets would land on a leg.
+  std::set<int> undriven;
+  for (std::size_t j = 0; j < kNumJoints; ++j) {undriven.insert(static_cast<int>(j));}
+  for (std::size_t a = 0; a < kNumActions; ++a) {undriven.erase(kActionToArt[a]);}
+  EXPECT_EQ(undriven, (std::set<int>{8, 13}));
+  EXPECT_EQ(kJointSlot[8], 29);    // head_pitch (measured)
+  EXPECT_EQ(kJointSlot[13], 30);   // head_yaw
+}
+
 TEST(JointMap, ActionOrderIsNotTheArticulationOrder)
 {
   // The trap this project was warned about: index i in the action vector and

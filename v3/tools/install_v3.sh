@@ -146,7 +146,8 @@ for pair in "mission_ctl.v2/config/mission.yaml mission_ctl/config/mission.yaml"
   diff "$DST/$1" "$DST/$2" | sed 's/^/    /' | head -60
 done
 echo "  expected: mission.yaml gains reflex: on and obj_stop_min_m 0.9; perception.yaml gains"
-echo "  proximity_center_region; bridge.yaml gains the reflex_* block (reflex_enable: false)."
+echo "  proximity_center_region; bridge.yaml gains the reflex_* block (reflex_enable: false)"
+echo "  and head_pitch_zero / head_yaw_zero."
 echo "  Any '<' line that is not one of those was a local value: write it into the new file."
 
 # ------------------------------------------------------------------ 6 build
